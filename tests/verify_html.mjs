@@ -84,10 +84,11 @@ console.log('--- 9. 集計サマリ ---');
 const tiles = [...doc.querySelectorAll('#summary .stat')];
 check('サマリのタイルが出る', tiles.length >= 4, tiles.length);
 const labels = tiles.map(t => t.querySelector('.stat-label').textContent);
-check('蓄積件数のタイルがある', labels.includes('蓄積した投稿'), labels);
+check('表示件数のタイルがある', labels.includes('表示中の投稿'), labels);
 check('ジャンル別のタイルもある', labels.includes('フェイシャル'), labels);
-const totalTile = tiles.find(t => t.querySelector('.stat-label').textContent === '蓄積した投稿');
-check('蓄積件数が8件', totalTile.querySelector('.stat-value').textContent.startsWith('8'), totalTile.textContent);
+const totalTile = tiles.find(t => t.querySelector('.stat-label').textContent === '表示中の投稿');
+check('表示件数が8件', totalTile.querySelector('.stat-value').textContent.startsWith('8'), totalTile.textContent);
+check('最終収集の表示がある', doc.getElementById('stamp').textContent.includes('最終収集'), doc.getElementById('stamp').textContent);
 
 console.log('--- 10. 伸び中の表示 ---');
 const badges = [...doc.querySelectorAll('.badge')];

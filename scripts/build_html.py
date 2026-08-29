@@ -30,6 +30,11 @@ OUTPUT_FILE = BASE_DIR / "docs" / "index.html"
 # 投稿直後の数件で velocity が跳ね上がるのを防ぐための下限（時間）
 VELOCITY_FLOOR_HOURS = 6.0
 
+# ページに載せる範囲。data/posts.json には全履歴が残り、ここで絞るのは表示分だけ。
+# 無制限にするとHTMLが際限なく太り、GitHubの1ファイル上限に当たって更新が止まる。
+DEFAULT_MAX_AGE_DAYS = 180
+DEFAULT_MAX_POSTS = 1500
+
 
 def build_rows(store, now=None):
     """蓄積データを、HTML に埋め込む行のリストに変換する。"""
@@ -77,6 +82,43 @@ def embed_json(data):
     )
 
 
+def select_rows(rows, max_age_days, max_posts):
+    """
+    ページに載せる投稿を選ぶ。返り値は (選んだ行, 期間外で外した数, 上限で外した数)。
+
+    件数を絞るとき、いいね順だけで切ると「新しくて急上昇中だがまだ総数が
+    少ない投稿」が落ちてしまう。逆に伸び順だけで切ると定番の強い投稿が
+    落ちる。そこで両方の上位を半分ずつ確保してから、残りをいいね順で埋める。
+    """
+    if max_age_days > 0:
+        limit_hours = max_age_days * 24
+        # 投稿日時が取れなかったものは判断できないので残す
+        in_window = [r for r in rows if r["ageHours"] is None or r["ageHours"] <= limit_hours]
+    else:
+        in_window = list(rows)
+    aged_out = len(rows) - len(in_window)
+
+    if max_posts <= 0 or len(in_window) <= max_posts:
+        return in_window, aged_out, 0
+
+    half = max_posts // 2
+    by_likes = sorted(in_window, key=lambda r: -r["likes"])
+    by_velocity = sorted(in_window, key=lambda r: -r["velocity"])
+
+    chosen = {}
+    for r in by_velocity[:half]:
+        chosen[r["id"]] = r
+    for r in by_likes[:half]:
+        chosen[r["id"]] = r
+    for r in by_likes:
+        if len(chosen) >= max_posts:
+            break
+        chosen.setdefault(r["id"], r)
+
+    selected = list(chosen.values())
+    return selected, aged_out, len(in_window) - len(selected)
+
+
 def rising_threshold(rows):
     """
     「伸び中」と表示する基準。全投稿の velocity の上位10%にあたる値を使う。
@@ -89,7 +131,7 @@ def rising_threshold(rows):
     return values[index]
 
 
-def build_summary(rows, store):
+def build_summary(rows, store, archived):
     """一覧の上に出す集計。詳細より先に全体像が分かるようにする。"""
     genres = {}
     for r in rows:
@@ -98,6 +140,7 @@ def build_summary(rows, store):
     week = [r for r in rows if r["ageHours"] is not None and r["ageHours"] <= 168]
     return {
         "total": len(rows),
+        "archived": archived,
         "genres": sorted(genres.items(), key=lambda kv: -kv[1]),
         "over1000": len([r for r in rows if r["likes"] >= 1000]),
         "thisWeek": len(week),
@@ -106,7 +149,7 @@ def build_summary(rows, store):
     }
 
 
-def render_html(rows, generated_at, store):
+def render_html(rows, generated_at, store, archived):
     genres = sorted({g for r in rows for g in r["genres"]})
     keywords = sorted({k for r in rows for k in r["keywords"]})
 
@@ -114,7 +157,7 @@ def render_html(rows, generated_at, store):
         TEMPLATE.replace("__DATA__", embed_json(rows))
         .replace("__GENRES__", embed_json(genres))
         .replace("__KEYWORDS__", embed_json(keywords))
-        .replace("__SUMMARY__", embed_json(build_summary(rows, store)))
+        .replace("__SUMMARY__", embed_json(build_summary(rows, store, archived)))
         .replace("__RISING__", str(round(rising_threshold(rows), 4)))
         .replace("__GENERATED__", generated_at)
         .replace("__COUNT__", str(len(rows)))
@@ -126,7 +169,7 @@ TEMPLATE = r"""
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <!-- 公開リポジトリで配信するため、検索結果には出さない -->
 <meta name="robots" content="noindex, nofollow">
-<title>薄毛・育毛・フェイシャルの伸びてる投稿</title>
+<title>Threads Research Tool（薄毛、育毛、フェイシャル ver）</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Zen+Old+Mincho:wght@600;900&family=Roboto+Mono:wght@400;500;700&display=swap">
@@ -191,6 +234,9 @@ TEMPLATE = r"""
                  -apple-system, BlinkMacSystemFont, "Yu Gothic Medium", sans-serif;
     line-height: 1.75;
     font-feature-settings: "palt" 1;
+    word-break: normal;
+    overflow-wrap: break-word;
+    line-break: strict;
   }
 
   .wrap { max-width: 880px; margin: 0 auto; padding: 40px 20px 96px; }
@@ -202,24 +248,25 @@ TEMPLATE = r"""
   }
 
   /* --- 見出し --- */
-  .eyebrow {
-    font-family: "Roboto Mono", ui-monospace, monospace;
-    font-size: .68rem;
-    letter-spacing: .18em;
-    text-transform: uppercase;
-    color: var(--muted);
-    margin-bottom: 10px;
-  }
   h1 {
     font-family: "Zen Old Mincho", "Hiragino Mincho ProN", "Yu Mincho", serif;
     font-weight: 900;
     font-size: clamp(1.5rem, 4vw, 2.1rem);
     line-height: 1.35;
     letter-spacing: .01em;
-    margin: 0 0 10px;
+    margin: 0;
     text-wrap: balance;
   }
-  .lede { color: var(--muted); font-size: .88rem; margin: 0; }
+  /* 対象ジャンルの但し書き。名前より一段弱く見せる */
+  .ver {
+    display: block;
+    font-family: "Hiragino Sans", "Noto Sans JP", sans-serif;
+    font-weight: 400;
+    font-size: .74rem;
+    letter-spacing: .02em;
+    color: var(--muted);
+    margin-top: 6px;
+  }
 
   /* --- 集計サマリ：詳細より先に全体像を出す --- */
   .summary {
@@ -236,8 +283,11 @@ TEMPLATE = r"""
   .stat-label {
     font-size: .7rem; color: var(--muted); letter-spacing: .06em;
     display: block; margin-bottom: 4px;
+    /* 「表示中/の投稿」のように助詞で割れないよう、まとめて扱う */
+    white-space: nowrap;
   }
   .stat-value {
+    white-space: nowrap;
     font-family: "Roboto Mono", ui-monospace, monospace;
     font-size: 1.25rem; font-weight: 700;
     font-variant-numeric: tabular-nums;
@@ -280,6 +330,7 @@ TEMPLATE = r"""
     color: var(--accent); font-weight: 700;
   }
   .count {
+    white-space: nowrap;
     font-family: "Roboto Mono", ui-monospace, monospace;
     color: var(--muted); font-size: .76rem; margin-bottom: 14px;
     font-variant-numeric: tabular-nums;
@@ -305,6 +356,7 @@ TEMPLATE = r"""
   }
   .user { font-weight: 700; font-size: .86rem; }
   .badge {
+    white-space: nowrap;
     font-size: .66rem; font-weight: 700; letter-spacing: .04em;
     padding: 2px 8px; border-radius: 999px;
     background: var(--rising-soft); color: var(--rising);
@@ -319,12 +371,23 @@ TEMPLATE = r"""
   .age { color: var(--muted); }
 
   .text {
-    white-space: pre-wrap; word-break: break-word;
+    white-space: pre-wrap;
+    /* word-break: break-word は単語の途中で割るので使わない。
+       overflow-wrap なら、1語が行に収まらないときだけ割る。
+       line-break: strict で日本語の禁則処理を厳しい方に寄せる。 */
+    word-break: normal;
+    overflow-wrap: break-word;
+    line-break: strict;
     font-size: .92rem; margin: 0 0 12px;
   }
 
+  /* 文節のかたまり。ここで囲った範囲は途中で改行されない。
+     「を」「と」などの助詞が行頭に来るのを防ぐために使う。 */
+  .nb { white-space: nowrap; }
+
   .tags { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
   .tag {
+    white-space: nowrap;
     font-size: .7rem; padding: 3px 9px; border-radius: 4px;
     background: var(--chip); color: var(--muted);
   }
@@ -339,13 +402,11 @@ TEMPLATE = r"""
 
 <div class="wrap">
   <header>
-    <p class="eyebrow">Threads Trend Collector</p>
-    <h1>薄毛・育毛・フェイシャルの伸びてる投稿</h1>
-    <p class="lede">いま反応が集まっている投稿を集めた一覧です。投稿ネタを探すために使います。</p>
+    <h1>Threads Research Tool<span class="ver"><span class="nb">（薄毛、</span><span class="nb">育毛、</span><span class="nb">フェイシャル ver）</span></span></h1>
   </header>
 
   <div class="summary" id="summary"></div>
-  <p class="stamp">最終収集 __GENERATED__</p>
+  <p class="stamp" id="stamp"></p>
 
   <div class="controls">
     <div class="row">
@@ -403,10 +464,17 @@ TEMPLATE = r"""
     return el;
   }
 
+  // 文節を1かたまりとして置く。途中で改行されないので、
+  // 「を」「と」などの助詞が行頭に来ることがなくなる。
+  function phrases(parent, list) {
+    list.forEach(function (t) { parent.appendChild(mk('span', 'nb', t)); });
+    return parent;
+  }
+
   // --- 集計サマリ ---
   (function renderSummary() {
     var tiles = [
-      ['蓄積した投稿', SUMMARY.total, '件'],
+      ['表示中の投稿', SUMMARY.total, '件'],
       ['直近7日の投稿', SUMMARY.thisWeek, '件'],
       ['1000いいね超え', SUMMARY.over1000, '件'],
       ['投稿者', SUMMARY.authors, '人']
@@ -421,6 +489,17 @@ TEMPLATE = r"""
       box.appendChild(v);
       els.summary.appendChild(box);
     });
+  })();
+
+  // 何件のうち何件を見ているのかを明示する
+  (function renderStamp() {
+    var stamp = document.getElementById('stamp');
+    var units = ['最終収集 __GENERATED__'];
+    if (SUMMARY.archived > SUMMARY.total) {
+      units.push('　/　蓄積 ' + SUMMARY.archived.toLocaleString() + ' 件のうち');
+      units.push(SUMMARY.total.toLocaleString() + ' 件を表示');
+    }
+    phrases(stamp, units);
   })();
 
   KEYWORDS.forEach(function (k) {
@@ -491,8 +570,10 @@ TEMPLATE = r"""
     els.list.textContent = '';
 
     if (rows.length === 0) {
-      els.list.appendChild(mk('div', 'empty',
-        '条件に合う投稿がありません。絞り込みを緩めてください。'));
+      // 「絞り込みを」を1かたまりにして、「を」が行頭に来ないようにする
+      els.list.appendChild(phrases(mk('div', 'empty'), [
+        '条件に合う投稿が', 'ありません。', '絞り込みを', '緩めてください。'
+      ]));
       return;
     }
 
@@ -548,6 +629,10 @@ def main():
     parser.add_argument("--output", type=Path, default=OUTPUT_FILE)
     parser.add_argument("--input", type=Path, default=DATA_FILE,
                         help="読み込む蓄積データ（検証用に差し替えられる）")
+    parser.add_argument("--max-age-days", type=int, default=DEFAULT_MAX_AGE_DAYS,
+                        help="この日数より古い投稿はページに載せない（0で無制限）")
+    parser.add_argument("--max-posts", type=int, default=DEFAULT_MAX_POSTS,
+                        help="ページに載せる最大件数（0で無制限）")
     args = parser.parse_args()
 
     if not args.input.exists():
@@ -556,13 +641,25 @@ def main():
         return 1
 
     store = json.loads(args.input.read_text(encoding="utf-8"))
-    rows = build_rows(store)
-    html = render_html(rows, now_jst_iso()[:16].replace("T", " "), store)
+    all_rows = build_rows(store)
+    rows, aged_out, over_cap = select_rows(all_rows, args.max_age_days, args.max_posts)
+    rows.sort(key=lambda r: r["likes"], reverse=True)
+
+    html = render_html(rows, now_jst_iso()[:16].replace("T", " "), store, len(all_rows))
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(html, encoding="utf-8")
 
-    print(f"生成しました: {args.output}  （{len(rows)} 件）")
+    size_kb = args.output.stat().st_size / 1024
+    print(f"生成しました: {args.output}  （{len(rows)} 件 / {size_kb:.0f} KB）")
+    # 黙って捨てない。何をどれだけ載せなかったかを必ず出す。
+    if aged_out or over_cap:
+        print(f"蓄積 {len(all_rows)} 件のうち、ページに載せなかった分:")
+        if aged_out:
+            print(f"  {args.max_age_days} 日より古い: {aged_out} 件")
+        if over_cap:
+            print(f"  上限 {args.max_posts} 件を超過: {over_cap} 件")
+        print("  （data/posts.json には全件そのまま残っています）")
     print(f"開く: open {args.output}")
     return 0
 

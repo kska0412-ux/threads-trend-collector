@@ -32,14 +32,26 @@ echo "===== 3. マージ処理 ====="
 python3 "$ROOT/tests/verify_merge.py"
 
 echo
-echo "===== 4. HTML生成 ====="
+echo "===== 4. 表示範囲の絞り込み ====="
+python3 "$ROOT/tests/verify_select.py"
+
+echo
+echo "===== 5. HTML生成 ====="
 python3 "$ROOT/tests/make_fixture.py" --output "$WORK/fixture_posts.json"
 python3 "$ROOT/scripts/build_html.py" --input "$WORK/fixture_posts.json" --output "$WORK/preview.html"
 SCRATCH="$WORK" node "$ROOT/tests/verify_html.mjs"
 
 echo
-echo "===== 5. 公開判定 ====="
+echo "===== 6. 改行の作法 ====="
+SCRATCH="$WORK" node "$ROOT/tests/verify_wrapping.mjs"
+
+echo
+echo "===== 7. 公開判定 ====="
 bash "$ROOT/tests/verify_publish.sh"
+
+echo
+echo "===== 8. 公開の安全性 ====="
+bash "$ROOT/tests/verify_safety.sh"
 
 echo
 echo "全テスト通過"
