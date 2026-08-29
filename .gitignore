@@ -1,0 +1,10 @@
+# 収集データと生ログ（成果物のHTMLに埋め込まれるので追跡不要）
+data/
+logs/
+
+# ブラウザのログインセッション。絶対にコミットしない
+.browser-profile/
+
+node_modules/
+__pycache__/
+out/
