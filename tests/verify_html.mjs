@@ -80,15 +80,34 @@ const link = doc.querySelector('.card .link');
 check('元投稿リンクがある', link && link.href.startsWith('https://www.threads.net/'), link && link.href);
 check('target=_blank + noopener', link.target === '_blank' && link.rel === 'noopener noreferrer', link.rel);
 
-console.log('--- 9. 集計サマリ ---');
+console.log('--- 9. 集計タイル（余りを出さない） ---');
+const css9 = doc.querySelector('style').textContent;
 const tiles = [...doc.querySelectorAll('#summary .stat')];
-check('サマリのタイルが出る', tiles.length >= 4, tiles.length);
+check('タイルはちょうど4枚', tiles.length === 4, tiles.length);
 const labels = tiles.map(t => t.querySelector('.stat-label').textContent);
 check('表示件数のタイルがある', labels.includes('表示中の投稿'), labels);
-check('ジャンル別のタイルもある', labels.includes('フェイシャル'), labels);
+// ジャンルをタイルに混ぜると枚数が変わり、最後の1枚が取り残される
+check('ジャンルはタイルに混ざっていない',
+      !labels.some(l => ['薄毛', '育毛', 'フェイシャル'].includes(l)), labels);
+check('列数が固定（auto-fitではない）',
+      /\.summary\s*\{[^}]*grid-template-columns:\s*repeat\(4,\s*1fr\)/s.test(css9), null);
+check('4枚は4列で割り切れる', 4 % 4 === 0, null);
+check('狭い画面では2列', /\.summary\s*\{\s*grid-template-columns:\s*repeat\(2,\s*1fr\)/.test(css9), null);
+check('4枚は2列でも割り切れる', 4 % 2 === 0, null);
 const totalTile = tiles.find(t => t.querySelector('.stat-label').textContent === '表示中の投稿');
 check('表示件数が8件', totalTile.querySelector('.stat-value').textContent.startsWith('8'), totalTile.textContent);
 check('最終収集の表示がある', doc.getElementById('stamp').textContent.includes('最終収集'), doc.getElementById('stamp').textContent);
+
+console.log('--- 9b. ジャンル別の横棒 ---');
+const bars = [...doc.querySelectorAll('.bar-row')];
+check('ジャンルの数だけ棒が並ぶ', bars.length === 3, bars.length);
+check('見出しが出る', doc.querySelector('.breakdown-title').textContent === 'ジャンル別', null);
+const widths = bars.map(b => parseFloat(b.querySelector('.bar-fill').style.width));
+check('最多ジャンルが100%', Math.max(...widths) === 100, widths);
+check('棒の長さが件数順に並ぶ', widths.every((w, i) => i === 0 || widths[i - 1] >= w), widths);
+check('件数が数字で出る', bars.every(b => /^\d+ 件$/.test(b.querySelector('.bar-count').textContent)),
+      bars.map(b => b.querySelector('.bar-count').textContent));
+check('ジャンル名が途中で割れない', /\.bar-name\s*\{[^}]*white-space:\s*nowrap/s.test(css9), null);
 
 console.log('--- 10. 伸び中の表示 ---');
 const badges = [...doc.querySelectorAll('.badge')];

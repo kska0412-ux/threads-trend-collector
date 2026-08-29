@@ -268,18 +268,55 @@ TEMPLATE = r"""
     margin-top: 6px;
   }
 
-  /* --- 集計サマリ：詳細より先に全体像を出す --- */
-  .summary {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
-    gap: 1px;
-    background: var(--border);
+  /* --- 集計：詳細より先に全体像を出す --- */
+  .panel {
     border: 1px solid var(--border);
     border-radius: 10px;
     overflow: hidden;
+    background: var(--surface);
     margin: 28px 0 8px;
   }
+  /* 4枚で固定する。auto-fit だと枚数によって最後の1枚だけ次の行に
+     取り残され、空いた枠が塗り残しに見えてしまうため。 */
+  .summary {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 1px;
+    background: var(--border);
+  }
+  @media (max-width: 620px) {
+    /* 4枚なので2列でもきれいに埋まる */
+    .summary { grid-template-columns: repeat(2, 1fr); }
+  }
   .stat { background: var(--surface); padding: 14px 16px; }
+
+  /* --- ジャンル別の内訳 --- */
+  /* 棒にしておけば、ジャンルが何個あっても1行1本で並ぶので取り残しが出ない */
+  .breakdown { padding: 15px 16px 17px; border-top: 1px solid var(--border); }
+  .breakdown-title {
+    font-size: .7rem; color: var(--muted); letter-spacing: .06em;
+    margin: 0 0 11px; white-space: nowrap;
+  }
+  .bar-row {
+    display: grid;
+    grid-template-columns: 6.5em 1fr auto;
+    gap: 12px; align-items: center;
+  }
+  .bar-row + .bar-row { margin-top: 8px; }
+  .bar-name { font-size: .76rem; white-space: nowrap; }
+  .bar-track {
+    height: 6px; border-radius: 999px;
+    background: var(--chip); overflow: hidden;
+  }
+  .bar-fill { height: 100%; border-radius: 999px; background: var(--accent); }
+  .bar-count {
+    font-family: "Roboto Mono", ui-monospace, monospace;
+    font-size: .74rem; color: var(--muted);
+    font-variant-numeric: tabular-nums; white-space: nowrap;
+  }
+  @media (max-width: 620px) {
+    .bar-row { grid-template-columns: 5.5em 1fr auto; gap: 9px; }
+  }
   .stat-label {
     font-size: .7rem; color: var(--muted); letter-spacing: .06em;
     display: block; margin-bottom: 4px;
@@ -405,7 +442,10 @@ TEMPLATE = r"""
     <h1>Threads Research Tool<span class="ver"><span class="nb">（薄毛、</span><span class="nb">育毛、</span><span class="nb">フェイシャル ver）</span></span></h1>
   </header>
 
-  <div class="summary" id="summary"></div>
+  <div class="panel">
+    <div class="summary" id="summary"></div>
+    <div class="breakdown" id="breakdown"></div>
+  </div>
   <p class="stamp" id="stamp"></p>
 
   <div class="controls">
@@ -454,7 +494,8 @@ TEMPLATE = r"""
     genres: document.getElementById('genres'),
     list: document.getElementById('list'),
     count: document.getElementById('count'),
-    summary: document.getElementById('summary')
+    summary: document.getElementById('summary'),
+    breakdown: document.getElementById('breakdown')
   };
 
   function mk(tag, cls, text) {
@@ -471,7 +512,8 @@ TEMPLATE = r"""
     return parent;
   }
 
-  // --- 集計サマリ ---
+  // --- 集計 ---
+  // タイルは必ず4枚。ジャンルはここに混ぜず、下の棒グラフで見せる。
   (function renderSummary() {
     var tiles = [
       ['表示中の投稿', SUMMARY.total, '件'],
@@ -479,15 +521,37 @@ TEMPLATE = r"""
       ['1000いいね超え', SUMMARY.over1000, '件'],
       ['投稿者', SUMMARY.authors, '人']
     ];
-    SUMMARY.genres.forEach(function (pair) { tiles.push([pair[0], pair[1], '件']); });
-
     tiles.forEach(function (t) {
       var box = mk('div', 'stat');
       box.appendChild(mk('span', 'stat-label', t[0]));
-      var v = mk('div', 'stat-value', String(t[1]));
+      var v = mk('div', 'stat-value', t[1].toLocaleString());
       v.appendChild(mk('span', 'unit', t[2]));
       box.appendChild(v);
       els.summary.appendChild(box);
+    });
+  })();
+
+  // --- ジャンル別の内訳 ---
+  // 棒の長さは最多ジャンルを100%とした相対値。1つの投稿が複数ジャンルに
+  // 入ることがあり、合計が総数と一致しないため、全体に対する割合としては見せない。
+  (function renderBreakdown() {
+    if (!SUMMARY.genres.length) { els.breakdown.remove(); return; }
+
+    els.breakdown.appendChild(mk('p', 'breakdown-title', 'ジャンル別'));
+    var max = SUMMARY.genres.reduce(function (m, p) { return Math.max(m, p[1]); }, 0);
+
+    SUMMARY.genres.forEach(function (pair) {
+      var row = mk('div', 'bar-row');
+      row.appendChild(mk('span', 'bar-name', pair[0]));
+
+      var track = mk('div', 'bar-track');
+      var fill = mk('div', 'bar-fill');
+      fill.style.width = (max > 0 ? (pair[1] / max) * 100 : 0) + '%';
+      track.appendChild(fill);
+      row.appendChild(track);
+
+      row.appendChild(mk('span', 'bar-count', pair[1].toLocaleString() + ' 件'));
+      els.breakdown.appendChild(row);
     });
   })();
 
