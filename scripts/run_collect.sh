@@ -3,6 +3,14 @@
 # launchd から1日3回呼ばれる。手動で実行しても同じことが起きる。
 set -uo pipefail
 
+# 収集は数分かかる。途中でスリープに入ると中断されるため、
+# 実行中だけ起きたままにする（終了すれば元の設定に戻る）。
+if [ -z "${TTC_AWAKE:-}" ] && [ -x /usr/bin/caffeinate ]; then
+  export TTC_AWAKE=1
+  # bash 経由で呼ぶ。ファイルに実行権限が無くても動くようにするため。
+  exec /usr/bin/caffeinate -i -s /bin/bash "${BASH_SOURCE[0]}" "$@"
+fi
+
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 mkdir -p logs
