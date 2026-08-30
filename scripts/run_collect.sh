@@ -20,12 +20,14 @@ log() { echo "$(date '+%Y-%m-%d %H:%M:%S') $*" >> "$LOG"; }
 
 log "===== 開始 ====="
 
-if ! /usr/bin/env python3 scripts/collect.py >> "$LOG" 2>&1; then
+# -u を付けて出力のバッファリングを切る。付けないと数キロバイト溜まるまで
+# ログに書き出されず、動いているのに止まって見える。
+if ! /usr/bin/env python3 -u scripts/collect.py >> "$LOG" 2>&1; then
   log "収集に失敗。ページは更新しません。"
   exit 1
 fi
 
-if ! /usr/bin/env python3 scripts/build_html.py >> "$LOG" 2>&1; then
+if ! /usr/bin/env python3 -u scripts/build_html.py >> "$LOG" 2>&1; then
   log "HTML生成に失敗。"
   exit 1
 fi
