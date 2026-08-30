@@ -13,6 +13,14 @@
   <key>WorkingDirectory</key>
   <string>__ROOT__</string>
 
+  <!-- launchd の既定 PATH は /usr/bin:/bin:/usr/sbin:/sbin だけで、
+       /usr/local/bin にある node や gh を見つけられない。 -->
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+  </dict>
+
   <!-- 朝7時 / 昼13時 / 夜21時 の1日3回 -->
   <key>StartCalendarInterval</key>
   <array>

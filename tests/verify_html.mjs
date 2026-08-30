@@ -96,7 +96,18 @@ check('狭い画面では2列', /\.summary\s*\{\s*grid-template-columns:\s*repea
 check('4枚は2列でも割り切れる', 4 % 2 === 0, null);
 const totalTile = tiles.find(t => t.querySelector('.stat-label').textContent === '表示中の投稿');
 check('表示件数が8件', totalTile.querySelector('.stat-value').textContent.startsWith('8'), totalTile.textContent);
-check('最終収集の表示がある', doc.getElementById('stamp').textContent.includes('最終収集'), doc.getElementById('stamp').textContent);
+const stampText = doc.getElementById('stamp').textContent;
+check('最終収集の表示がある', stampText.includes('最終収集'), stampText);
+// HTMLを作り直しただけで時刻が進むと、更新されていないのに更新されたように見える
+const fixtureUpdatedAt = JSON.parse(fs.readFileSync(process.env.SCRATCH + '/fixture_posts.json', 'utf8')).updated_at.slice(0, 16).replace('T', ' ');
+check('最終収集は実際の収集時刻（HTML生成時刻ではない）', stampText.includes(fixtureUpdatedAt), { stamp: stampText, expected: fixtureUpdatedAt });
+// 8件すべて表示される版では「蓄積N件のうち」は出ないので、絞り込んだ版で確かめる
+const trimmedDoc = new JSDOM(fs.readFileSync(process.env.SCRATCH + '/preview_trimmed.html', 'utf8'),
+                             { runScripts: 'dangerously' }).window.document;
+const trimmedStamp = trimmedDoc.getElementById('stamp').textContent;
+check('絞り込んだときは蓄積件数も出る', /蓄積 \d+ 件のうち \d+ 件を表示/.test(trimmedStamp), trimmedStamp);
+check('絞り込んだ結果が3件', trimmedDoc.querySelectorAll('.card').length === 3, trimmedDoc.querySelectorAll('.card').length);
+check('絞り込んでいない版では蓄積件数を出さない', !stampText.includes('蓄積'), stampText);
 
 console.log('--- 9b. ジャンル別の横棒 ---');
 const bars = [...doc.querySelectorAll('.bar-row')];

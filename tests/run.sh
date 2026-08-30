@@ -39,6 +39,8 @@ echo
 echo "===== 5. HTML生成 ====="
 python3 "$ROOT/tests/make_fixture.py" --output "$WORK/fixture_posts.json"
 python3 "$ROOT/scripts/build_html.py" --input "$WORK/fixture_posts.json" --output "$WORK/preview.html"
+# 件数上限に当たったときの表示も確かめるため、絞り込みが起きる版も作る
+python3 "$ROOT/scripts/build_html.py" --input "$WORK/fixture_posts.json" --output "$WORK/preview_trimmed.html" --max-posts 3 > /dev/null
 SCRATCH="$WORK" node "$ROOT/tests/verify_html.mjs"
 
 echo

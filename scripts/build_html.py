@@ -555,12 +555,14 @@ TEMPLATE = r"""
     });
   })();
 
-  // 何件のうち何件を見ているのかを明示する
+  // 何件のうち何件を見ているのかを明示する。
+  // 「最終収集」は実際に収集した時刻。HTMLを作り直しただけでは進まない。
   (function renderStamp() {
     var stamp = document.getElementById('stamp');
-    var units = ['最終収集 __GENERATED__'];
+    var collectedAt = SUMMARY.updatedAt || '__GENERATED__';
+    var units = ['最終収集 ' + collectedAt];
     if (SUMMARY.archived > SUMMARY.total) {
-      units.push('　/　蓄積 ' + SUMMARY.archived.toLocaleString() + ' 件のうち');
+      units.push('　/　蓄積 ' + SUMMARY.archived.toLocaleString() + ' 件のうち ');
       units.push(SUMMARY.total.toLocaleString() + ' 件を表示');
     }
     phrases(stamp, units);

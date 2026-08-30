@@ -21,6 +21,7 @@ Threads から投稿を集めて data/posts.json に蓄積する。
 
 import argparse
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -122,12 +123,40 @@ def is_relevant(text, required_any):
     return any(word in body for word in required_any)
 
 
+# launchd から起動されると PATH が /usr/bin:/bin:/usr/sbin:/sbin だけになり、
+# /usr/local/bin にある node が見つからない。よくある場所を直接探す。
+NODE_CANDIDATES = (
+    "/usr/local/bin/node",
+    "/opt/homebrew/bin/node",
+    "/usr/bin/node",
+)
+
+
+def find_node():
+    """node の実行ファイルを探す。PATH に無くても既知の場所を当たる。"""
+    node = shutil.which("node")
+    if node:
+        return node
+    for path in NODE_CANDIDATES:
+        if os.access(path, os.X_OK):
+            return path
+    # nvm で入れている場合はバージョンごとのディレクトリに入る
+    nvm = Path.home() / ".nvm" / "versions" / "node"
+    if nvm.is_dir():
+        for version in sorted(nvm.iterdir(), reverse=True):
+            candidate = version / "bin" / "node"
+            if os.access(candidate, os.X_OK):
+                return str(candidate)
+    return None
+
+
 def require_node():
     """node が使えるか確かめる。無ければ分かる形で止める。"""
-    node = shutil.which("node")
+    node = find_node()
     if not node:
         raise SystemExit(
             "node が見つかりません。Playwright の実行に必要です。\n"
+            f"  探した場所: PATH, {', '.join(NODE_CANDIDATES)}, ~/.nvm/versions/node/*/bin/node\n"
             "  Node.js を入れてから再実行してください: https://nodejs.org/"
         )
     if not (BASE_DIR / "node_modules" / "playwright").exists():
