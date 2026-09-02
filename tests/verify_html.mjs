@@ -221,6 +221,17 @@ const tooLong = allUnits.flat().filter(u => u.length > colEm);
 check('どの区切りも列幅に収まる（単語が割れない）', tooLong.length === 0,
       { colEm, tooLong: tooLong.map(u => [u, u.length]) });
 
+console.log('--- 9c. カードのタグ ---');
+// 1ジャンル1語の構成だと、ジャンル名と検索語が同じで二重に出る
+const dupTags = [...doc.querySelectorAll('.card')].map(c => {
+  const t = [...c.querySelectorAll('.tag')].map(e => e.textContent);
+  return [t, new Set(t).size === t.length];
+}).filter(([, ok]) => !ok);
+check('同じタグが二重に出ない', dupTags.length === 0, dupTags.map(([t]) => t));
+check('タグ自体は出ている',
+      [...doc.querySelectorAll('.card .tag')].length > 0,
+      [...doc.querySelectorAll('.card .tag')].length);
+
 console.log('--- 10. 伸び中の表示 ---');
 const badges = [...doc.querySelectorAll('.badge')];
 check('伸び率上位に伸び中が付く', badges.length >= 1, badges.length);

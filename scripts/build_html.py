@@ -875,7 +875,12 @@ TEMPLATE = r"""
       card.appendChild(mk('p', 'text', p.text));
 
       var tags = mk('div', 'tags');
+      // ジャンル名と検索語が同じことがある（1ジャンル1語の構成）。
+      // そのまま並べると「ピラティス ピラティス」と二重に出る
+      var seenTags = {};
       p.genres.concat(p.keywords).forEach(function (t) {
+        if (seenTags[t]) return;
+        seenTags[t] = true;
         tags.appendChild(mk('span', 'tag', t));
       });
       if (p.permalink) {
