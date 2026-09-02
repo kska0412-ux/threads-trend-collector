@@ -81,7 +81,7 @@ check('ジャンル数と単位が離れない', verUnits.some(u => /\d+ジャ�
 console.log('--- 6. ジャンル別の横棒 ---');
 // 名前の長さで列幅が動くと、棒の開始位置が行ごとにずれる
 check('名前の列が固定幅',
-      /\.bar-row\s*\{[^}]*grid-template-columns:\s*8\.5em 1fr auto/s.test(css), null);
+      /\.bar-row\s*\{[^}]*grid-template-columns:\s*[\d.]+em 1fr auto/s.test(css), null);
 const barUnits = [...doc.querySelectorAll('.bar-name .nb')].map(e => e.textContent);
 check('ジャンル名が文節ごとに分かれている', barUnits.length > 0, barUnits);
 check('「・」が行頭に来ない', barUnits.every(u => !u.startsWith('・')), barUnits);

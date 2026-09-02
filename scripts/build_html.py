@@ -39,7 +39,7 @@ DEFAULT_MAX_POSTS = 1500
 
 # 各ジャンルに必ず確保する枠。
 # 上限を全体の順位だけで切ると、いいね数の絶対値が大きいジャンル（ダイエットなど）が
-# 枠を食い切り、ニッチなジャンル（エステ・リラクゼーションなど）がページから消える。
+# 枠を食い切り、ニッチなジャンル（パーマネントジュエリーなど）がページから消える。
 DEFAULT_PER_GENRE = 80
 
 
@@ -178,6 +178,63 @@ def load_config_genres(path):
     return list(config.get("genres", {}))
 
 
+def split_genre_name(name):
+    """
+    ジャンル名を、折り返してよい単位に切る。JS 側の nameParts と同じ規則。
+    「・」は前の語に付ける。行頭に「・」が落ちるのを防ぐため。
+    """
+    parts = name.split("・")
+    return [p + "・" if i < len(parts) - 1 else p for i, p in enumerate(parts)]
+
+
+def pack_lines(parts, width):
+    """区切りを幅 width（文字数）の行に詰めたとき、何行になるか。"""
+    lines = 1
+    used = 0
+    for part in parts:
+        if used and used + len(part) > width:
+            lines += 1
+            used = len(part)
+        else:
+            used += len(part)
+    return lines
+
+
+def bar_name_layout(genres):
+    """
+    ジャンル別の棒グラフで、名前の列幅（em）と高さ（em）を決める。
+
+    列幅を名前に合わせて伸ばすと、行ごとに棒の開始位置がずれて長さを比べられない。
+    かといって短く固定すると、長い名前が棒に重なる。そこで「一番長い区切り」が
+    1行に収まる幅を、実際のジャンル名から計算して全行に効かせる。
+
+    区切りは「・」の位置だけ。カタカナ語の途中では割らないので、「・」を含まない
+    長い名前（パーマネントジュエリーなど）は、その長さぶんの幅がそのまま要る。
+    高さは、一番多く折り返す名前の行数に揃える。1行と2行が混ざると
+    行の間隔がばらついて読みにくくなるため。
+    """
+    names = [g for g in genres if g]
+    if not names:
+        return 6.5, 1.4
+    widest = max(len(part) for name in names for part in split_genre_name(name))
+    lines = max(pack_lines(split_genre_name(name), widest) for name in names)
+    return max(6.5, widest + 0.5), round(lines * 1.4, 2)
+
+
+def rising_js(rows):
+    """
+    「伸び中」の基準を JavaScript の値として書き出す。
+
+    投稿が0件のとき Python の float("inf") をそのまま str() すると "inf" になり、
+    JS では未定義の識別子になってページのスクリプトが丸ごと止まる。
+    収集を始める前や、期間で全部落ちたときに必ず通る道なので、ここで潰す。
+    """
+    value = rising_threshold(rows)
+    if value == float("inf"):
+        return "Infinity"
+    return str(round(value, 4))
+
+
 def rising_threshold(rows):
     """
     「伸び中」と表示する基準。全投稿の velocity の上位10%にあたる値を使う。
@@ -221,15 +278,18 @@ def render_html(rows, generated_at, store, archived, config_genres=()):
     # チップの並びは下の「ジャンル別」の棒グラフと揃える
     genres = [[name, count] for name, count in summary["genres"]]
     keywords = sorted({k for r in rows for k in r["keywords"]})
+    bar_col, bar_minh = bar_name_layout([g for g, _ in genres])
 
     return (
         TEMPLATE.replace("__DATA__", embed_json(rows))
         .replace("__GENRES__", embed_json(genres))
         .replace("__KEYWORDS__", embed_json(keywords))
         .replace("__SUMMARY__", embed_json(summary))
-        .replace("__RISING__", str(round(rising_threshold(rows), 4)))
+        .replace("__RISING__", rising_js(rows))
         .replace("__GENERATED__", generated_at)
         .replace("__GENRE_COUNT__", str(len(genres)))
+        .replace("__BAR_COL__", str(bar_col))
+        .replace("__BAR_MINH__", str(bar_minh))
         .replace("__COUNT__", str(len(rows)))
     )
 
@@ -239,7 +299,7 @@ TEMPLATE = r"""
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <!-- 公開リポジトリで配信するため、検索結果には出さない -->
 <meta name="robots" content="noindex, nofollow">
-<title>Threads Research Tool（美容ジャンル ver）</title>
+<title>Threads Research Tool（美容ビジネス ver）</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Zen+Old+Mincho:wght@600;900&family=Roboto+Mono:wght@400;500;700&display=swap">
@@ -369,11 +429,11 @@ TEMPLATE = r"""
   }
   /* 名前の列は固定幅。名前に合わせて伸ばすと、長いジャンルの行だけ棒の
      開始位置がずれて、棒どうしの長さを目で比べられなくなる。
-     収まらない名前は「・」の位置で2行に折る（折り位置は .nb で決め打ち）。
-     8.5em は「・」で切ったときの最長の区切り8文字が1行に収まる幅。 */
+     収まらない名前は「・」の位置で折る（折り位置は .nb で決め打ち）。
+     幅と高さは実際のジャンル名から build_html.py が計算して埋める。 */
   .bar-row {
     display: grid;
-    grid-template-columns: 8.5em 1fr auto;
+    grid-template-columns: __BAR_COL__em 1fr auto;
     gap: 12px; align-items: center;
   }
   .bar-row + .bar-row { margin-top: 8px; }
@@ -382,7 +442,7 @@ TEMPLATE = r"""
      flex にしているのは、折り返した2行をまとめて上下中央に置くため。 */
   .bar-name {
     font-size: .76rem; line-height: 1.4;
-    min-height: 2.8em;
+    min-height: __BAR_MINH__em;
     display: flex; flex-wrap: wrap; align-content: center;
   }
   .bar-track {
@@ -538,7 +598,7 @@ TEMPLATE = r"""
 
 <div class="wrap">
   <header>
-    <h1>Threads Research Tool<span class="ver"><span class="nb">美容ジャンル全般</span><span class="nb">（__GENRE_COUNT__ジャンル）</span></span></h1>
+    <h1>Threads Research Tool<span class="ver"><span class="nb">美容ビジネス</span><span class="nb">（__GENRE_COUNT__ジャンル）</span></span></h1>
   </header>
 
   <div class="panel">

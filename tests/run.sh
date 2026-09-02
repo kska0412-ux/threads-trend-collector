@@ -48,6 +48,11 @@ python3 "$ROOT/scripts/build_html.py" --input "$WORK/fixture_posts.json" --outpu
 # 件数上限に当たったときの表示も確かめるため、絞り込みが起きる版も作る
 python3 "$ROOT/scripts/build_html.py" --input "$WORK/fixture_posts.json" --output "$WORK/preview_trimmed.html" --max-posts 3 > /dev/null
 SCRATCH="$WORK" node "$ROOT/tests/verify_html.mjs"
+# 収集を始める前（0件）でもページが壊れないこと。ここを外すと、
+# 伸び率の基準が Infinity になってスクリプトが丸ごと止まる
+echo '{"posts":{},"updated_at":null}' > "$WORK/empty_posts.json"
+python3 "$ROOT/scripts/build_html.py" --input "$WORK/empty_posts.json" --output "$WORK/preview_empty.html" > /dev/null
+SCRATCH="$WORK" node "$ROOT/tests/verify_empty.mjs"
 
 echo
 echo "===== 7. 改行の作法 ====="

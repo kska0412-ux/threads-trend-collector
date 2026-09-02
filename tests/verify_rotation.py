@@ -16,7 +16,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
 
 from collect import (  # noqa: E402
-    DEFAULT_BATCH,
+    MAX_BATCH,
+    RUNS_PER_DAY,
+    auto_batch,
     build_pairs,
     genres_with_data,
     plan_batch,
@@ -191,6 +193,22 @@ with tempfile.TemporaryDirectory() as tmp:
           written["genres"]["あ"]["required_any"] == ["A"], written["genres"]["あ"])
     check("画面表示用にジャンルを返す", set(genres) == {"あ", "い"}, list(genres))
 
+print("--- 1回で回す語数の自動決定 ---")
+# 固定値にすると、ジャンルを減らしたとき1回で全部回ってしまい（負荷が偏る）、
+# 増やしたときは一周に何日もかかるのに気づけない
+check("語数が無ければ0", auto_batch(0) == 0, auto_batch(0))
+check("1語でも1語は回す", auto_batch(1) == 1, auto_batch(1))
+check("19語なら7語（1日で一周）", auto_batch(19) == 7, auto_batch(19))
+check("50語なら17語（1日で一周）", auto_batch(50) == 17, auto_batch(50))
+check("1回が長くなりすぎないよう上限がある",
+      auto_batch(1000) == MAX_BATCH, auto_batch(1000))
+# 上限に当たらない範囲では、必ず1日で一周しきること
+short = [n for n in range(1, MAX_BATCH * RUNS_PER_DAY + 1)
+         if auto_batch(n) * RUNS_PER_DAY < n]
+check("上限内なら1日で一周しきる", short == [], short)
+check("上限を超えても語数を超える指定はしない",
+      all(auto_batch(n) <= max(1, n) for n in range(1, 200)), None)
+
 print("--- 実際の config/keywords.json ---")
 config = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
 real = build_pairs(config)
@@ -205,23 +223,28 @@ empty = [g for g, e in config["genres"].items() if not e.get("keywords")]
 check("全ジャンルにキーワードがある", empty == [], empty)
 
 # 1日3回の実行で全ジャンルを一周できることが、この方式の前提
+real_batch = auto_batch(len(real))
 covered = set()
 state = {}
-for _ in range(3):
-    batch, _start = select_batch(real, state, DEFAULT_BATCH)
+for _ in range(RUNS_PER_DAY):
+    batch, _start = select_batch(real, state, real_batch)
     covered.update(batch)
     state = state_of(batch[-1])
 uncovered = [f"{g}/{k}" for g, k in real if (g, k) not in covered]
-check(f"1日3回（{DEFAULT_BATCH}語×3）で全語をまわりきる", uncovered == [], uncovered)
+check(f"1日{RUNS_PER_DAY}回（{real_batch}語×{RUNS_PER_DAY}）で全語をまわりきる",
+      uncovered == [], uncovered)
 
 # 1回あたりの語数が跳ねると、実行時間が読めなくなる
 sizes = []
 state = {}
 for _ in range(9):
-    batch, _start = select_batch(real, state, DEFAULT_BATCH)
+    batch, _start = select_batch(real, state, real_batch)
     sizes.append(len(batch))
     state = state_of(batch[-1])
-check("1回の語数は常に一定", set(sizes) == {DEFAULT_BATCH}, sizes)
+check("1回の語数は常に一定", set(sizes) == {real_batch}, sizes)
+# 1語あたり最悪3分。1回が1時間を超えると、途中でスリープに入る危険が上がる
+check(f"最悪の実行時間が1時間以内（{real_batch}語×3分）", real_batch * 3 <= 60,
+      f"{real_batch * 3}分")
 
 print(f"\n結果: {PASS} pass / {FAIL} fail")
 sys.exit(0 if FAIL == 0 else 1)

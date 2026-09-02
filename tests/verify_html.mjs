@@ -53,9 +53,14 @@ const pending = chips.filter(c => c.classList.contains('pending'));
 
 // 対象は10ジャンル。ローテーションで今日まだ回っていないジャンルを隠すと、
 // 扱う範囲が狭まったように見えてしまう
-check('「すべて」＋設定の10ジャンルで11個', chips.length === 11, chips.map(chipName));
+// ジャンル構成は変わりうるので、数は直書きせず見出しの宣言と突き合わせる。
+// フィクスチャは3ジャンルぶんのデータを持つ
+const declared = Number((doc.querySelector('.ver').textContent.match(/(\d+)ジャンル/) || [])[1]);
+check('見出しがジャンル数を名乗る', declared > 0, doc.querySelector('.ver').textContent);
+check('「すべて」＋宣言どおりのジャンルが並ぶ', chips.length === declared + 1,
+      { chips: chips.length, declared });
 check('先頭が「すべて」', chipName(chips[0]) === 'すべて', chipName(chips[0]));
-check('データが無い7ジャンルも並ぶ', pending.length === 7, pending.map(chipName));
+check('データが無いジャンルも並ぶ', pending.length === declared - 3, pending.map(chipName));
 check('データがある3ジャンルは選べる',
       chips.length - 1 - pending.length === 3,
       chips.filter(c => !c.classList.contains('pending')).map(chipName));
@@ -75,16 +80,16 @@ click(pending[0]);
 check('未収集chipを押しても表示は変わらない', n() === 8, { count: n(), chip: chipName(pending[0]) });
 check('未収集chipは点灯しない', !pending[0].classList.contains('on'), pending[0].className);
 
-const facial = chips.find(c => chipName(c) === 'フェイシャル・小顔');
+const facial = chips.find(c => chipName(c) === 'エステティシャン');
 click(facial);
-check('フェイシャル・小顔のみ3件', n() === 3, { count: n(), users: users() });
+check('エステティシャンのみ3件', n() === 3, { count: n(), users: users() });
 check('chipにonクラス', facial.classList.contains('on'), facial.className);
 check('選択中は「すべて」が消灯', !chips[0].classList.contains('on'), chips[0].className);
 check('aria-pressedが連動する', facial.getAttribute('aria-pressed') === 'true',
       facial.getAttribute('aria-pressed'));
 
 // 複数ジャンルはOR。押した分だけ増える
-const hage = chips.find(c => chipName(c) === '薄毛');
+const hage = chips.find(c => chipName(c) === '育毛');
 click(hage);
 check('2ジャンル選ぶとOR（6件）', n() === 6, { count: n(), users: users() });
 
@@ -105,8 +110,9 @@ check('もう一度押すと解除される', n() === 8, n());
 console.log('--- 4b. 見出しのジャンル数 ---');
 // データにある数ではなく、設定にある数を出す。でないと収集が一周する前は
 // 対象が3ジャンルだけに見えてしまう
+// データがあるのは3ジャンルだけ。そこを数えると対象が狭まったように見える
 const verText = doc.querySelector('.ver').textContent;
-check('設定の10ジャンルを名乗る', verText.includes('10ジャンル'), verText);
+check('データの数ではなく設定の数を名乗る', declared > 3, verText);
 
 console.log('--- 5. キーワード絞り込み ---');
 const kwEl = doc.getElementById('keyword');
@@ -167,9 +173,9 @@ console.log('--- 9b. ジャンル別の横棒 ---');
 const bars = [...doc.querySelectorAll('.bar-row')];
 const barName = b => b.querySelector('.bar-name').textContent;
 const pendingBars = bars.filter(b => b.classList.contains('pending'));
-check('設定の10ジャンルぶん棒が並ぶ', bars.length === 10, bars.map(barName));
+check('設定のジャンルぶん棒が並ぶ', bars.length === declared, bars.map(barName));
 check('見出しが出る', doc.querySelector('.breakdown-title').textContent === 'ジャンル別', null);
-check('未収集は7本', pendingBars.length === 7, pendingBars.map(barName));
+check('未収集の棒はデータのある3ジャンルを除いた数', pendingBars.length === declared - 3, pendingBars.map(barName));
 const widths = bars.map(b => parseFloat(b.querySelector('.bar-fill').style.width));
 check('最多ジャンルが100%', Math.max(...widths) === 100, widths);
 check('棒の長さが件数順に並ぶ', widths.every((w, i) => i === 0 || widths[i - 1] >= w), widths);
@@ -184,39 +190,36 @@ check('未収集だけ理由を添える',
       pendingBars.map(b => b.querySelector('.bar-count').textContent));
 // 名前の長さで列幅が変わると、棒の開始位置が行ごとにずれて長さを比べられない
 check('名前の列が固定幅',
-      /\.bar-row\s*\{[^}]*grid-template-columns:\s*8\.5em 1fr auto/s.test(css9), null);
+      /\.bar-row\s*\{[^}]*grid-template-columns:\s*[\d.]+em 1fr auto/s.test(css9), null);
 // 画面幅で列幅を変えると、狭い画面だけ折り返し位置が変わってしまう
 const barCols = css9.replace(/\/\*[\s\S]*?\*\//g, '').match(/\.bar-row\s*\{[^}]*grid-template-columns/gs) || [];
 check('列幅の指定は1か所だけ', barCols.length === 1, barCols);
 // 1行の名前と2行の名前が混ざると、行の間隔がばらついて棒を比べにくい
-check('1行の名前でも2行ぶんの高さを取る',
-      /\.bar-name\s*\{[^}]*min-height:\s*2\.8em/s.test(css9), null);
+check('全行が同じ高さになる',
+      /\.bar-name\s*\{[^}]*min-height:\s*[\d.]+em/s.test(css9), null);
 check('折り返した名前が上下中央に来る',
       /\.bar-name\s*\{[^}]*align-content:\s*center/s.test(css9), null);
-// 長い名前は「・」の位置だけで2行に折る。カタカナ語の途中では割らない
-// ジャンル名を直に書くと、名前を変えるたびにテストが壊れる。
-// 「一番長い名前」を選んで、それが「・」で折れることを見る
-const longBar = bars.slice().sort((a, b) => barName(b).length - barName(a).length)[0];
-const longName = barName(longBar);
-check('一番長い名前に「・」がある', longName.includes('・'), longName);
-const longUnits = [...longBar.querySelectorAll('.nb')].map(e => e.textContent);
-check('「・」の数だけ分かれている',
-      longUnits.length === longName.split('・').length, longUnits);
-check('「・」が行頭に来ない', longUnits.every(u => !u.startsWith('・')), longUnits);
+// 長い名前は「・」の位置だけで折る。カタカナ語の途中では割らない。
+// ジャンル名を直に書くと名前を変えるたびに壊れるので、守るべきことだけ見る
+const allUnits = bars.map(b => [...b.querySelectorAll('.bar-name .nb')].map(e => e.textContent));
+check('ジャンル名が欠けずに .nb へ入っている',
+      allUnits.every((u, i) => u.join('') === barName(bars[i])),
+      allUnits.map((u, i) => [u.join(''), barName(bars[i])]).filter(([a, b]) => a !== b));
+check('「・」が行頭に来ない',
+      allUnits.flat().every(u => !u.startsWith('・')),
+      allUnits.flat().filter(u => u.startsWith('・')));
 check('「・」は前の語にくっつく',
-      longUnits.slice(0, -1).every(u => u.endsWith('・')), longUnits);
-check('全文が .nb の中に収まっている', longUnits.join('') === longName,
-      { units: longUnits.join(''), all: longName });
-// 8.5em の列に1行で収まらない区切りがあると、そこで単語が割れる
-const tooLong = bars.flatMap(b => [...b.querySelectorAll('.bar-name .nb')].map(e => e.textContent))
-                    .filter(u => u.length > 8);
-check('どの区切りも8文字以内（列幅に収まる）', tooLong.length === 0, tooLong);
-const shortBar = bars.find(b => barName(b) === '薄毛');
+      allUnits.every(u => u.slice(0, -1).every(x => x.endsWith('・'))), allUnits);
 check('「・」の無い名前は1かたまり',
-      shortBar.querySelectorAll('.nb').length === 1, shortBar.innerHTML);
-check('どの名前も途中で割れない仕組みに乗っている',
-      bars.every(b => [...b.querySelectorAll('.bar-name .nb')].map(e => e.textContent).join('') === barName(b)),
-      bars.map(barName));
+      allUnits.every((u, i) => barName(bars[i]).includes('・') || u.length === 1),
+      allUnits.map((u, i) => [barName(bars[i]), u.length]));
+// 列幅より長い区切りがあると、そこでカタカナ語が割れる。
+// 幅はジャンル名から build_html.py が計算して埋めている
+const colEm = Number((css9.match(/\.bar-row\s*\{[^}]*grid-template-columns:\s*([\d.]+)em/s) || [])[1]);
+check('列幅がページに埋まっている', colEm > 0, colEm);
+const tooLong = allUnits.flat().filter(u => u.length > colEm);
+check('どの区切りも列幅に収まる（単語が割れない）', tooLong.length === 0,
+      { colEm, tooLong: tooLong.map(u => [u, u.length]) });
 
 console.log('--- 10. 伸び中の表示 ---');
 const badges = [...doc.querySelectorAll('.badge')];

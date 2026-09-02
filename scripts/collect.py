@@ -49,10 +49,25 @@ BATCH_FILE = BASE_DIR / "data" / "_batch_keywords.json"
 # 一度でも収集にかけたキーワードの記録。設定に足したばかりの語を見分けるために使う。
 SEEN_FILE = BASE_DIR / "data" / "keywords_seen.json"
 
-# 1回の実行で処理するキーワード数。
-# 全ジャンルを毎回回すと、1語あたり最悪3分（リトライ＋90秒タイムアウト）なので
-# 50語で4時間を超える。1日3回の実行で丁度一周する数にしてある。
-DEFAULT_BATCH = 17
+# 1日に走る回数（launchd の設定と合わせてある）。
+RUNS_PER_DAY = 3
+
+# 1回で処理する語数の上限。1語あたり最悪3分（リトライ＋90秒タイムアウト）なので、
+# 20語で最悪1時間。これ以上増やすと1回が長くなりすぎ、途中でスリープに入る
+# 可能性も上がる。語数がこれを超えるジャンル構成では、一周に複数日かかる。
+MAX_BATCH = 20
+
+
+def auto_batch(total):
+    """
+    1日3回の実行で全キーワードを一周する語数。設定の語数から決める。
+
+    固定値にすると、ジャンルを減らしたとき1回で全部回ってしまい（負荷が偏る）、
+    増やしたときは一周に何日もかかるのに気づけない。
+    """
+    if total <= 0:
+        return 0
+    return max(1, min(MAX_BATCH, -(-total // RUNS_PER_DAY)))
 
 # 保存する投稿フィールド。スクレイパが返すキーと一致させてある。
 POST_FIELDS = ("id", "text", "username", "timestamp", "permalink", "like_count")
@@ -417,8 +432,8 @@ def main():
                         help="ローテーションせず全ジャンルを1回で回す（数時間かかる）")
     parser.add_argument("--missing", action="store_true",
                         help="まだ1件も集まっていないジャンルだけ収集する")
-    parser.add_argument("--batch", type=int, default=DEFAULT_BATCH,
-                        help=f"1回で処理するキーワード数（既定{DEFAULT_BATCH}／0で全部）")
+    parser.add_argument("--batch", type=int, default=None,
+                        help="1回で処理するキーワード数（既定は1日3回で一周する数／0で全部）")
     parser.add_argument("--limit", type=int, default=0,
                         help="先頭N個のキーワードだけ処理する（試運転用。ローテーションは進めない）")
     parser.add_argument("--delay", type=float, default=5.0,
@@ -451,6 +466,7 @@ def main():
         if seen is None:
             seen = seen_from_store(load_store(), pairs)
         window = []
+        batch = args.batch if args.batch is not None else auto_batch(len(pairs))
 
         # --- 今回どこを回すか決める ---
         if args.genre:
@@ -479,7 +495,7 @@ def main():
             print(f"全 {len(pairs)} 語を1回で処理します（--all）。数時間かかります。")
         else:
             batch_pairs, window, start = plan_batch(
-                pairs, load_rotation(), args.batch, seen
+                pairs, load_rotation(), batch, seen
             )
             advance = bool(window)
             fresh_count = 0 if seen is None else len([p for p in batch_pairs if p not in seen])

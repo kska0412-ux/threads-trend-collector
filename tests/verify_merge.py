@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 """collect.py のマージ処理を検証する。ブラウザも通信も使わない。"""
 
+import json
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
 from collect import merge_posts, is_relevant, load_required_any  # noqa: E402
+from common import CONFIG_FILE  # noqa: E402
 
 PASS = 0
 FAIL = 0
@@ -87,13 +89,27 @@ check("本文が空文字でも落ちない", is_relevant("", HAIR) is False, No
 
 print("--- 設定の読み込み ---")
 table = load_required_any()
-# ジャンルは config/keywords.json で足し引きするので、数ではなく中身で確かめる
+# ジャンル名は入れ替わりうるので、特定の名前ではなく満たすべき条件で確かめる
 check("設定にあるジャンルを全部読める", len(table) >= 3, list(table))
-check("薄毛の必須語が入っている", "つむじ" in table["薄毛"], table["薄毛"][:5])
-check("毛穴・ニキビの必須語が入っている",
-      "毛穴" in table["毛穴・ニキビ"], table["毛穴・ニキビ"][:5])
 check("全ジャンルに必須語がある",
       all(v for v in table.values()), [g for g, v in table.items() if not v])
+# 必須語が1〜2個だとフィルタが強すぎて、関係ある投稿まで落ちる
+thin = {g: v for g, v in table.items() if len(v) < 5}
+check("必須語が薄いジャンルが無い", thin == {}, thin)
+# ジャンル名そのものか、それを構成する語が必須語に入っていること。
+# 入っていないと、そのジャンルの中心的な投稿まで落ちる。
+# 「経営」「メニュー」のように、あえて外している場合だけ設定に印を付ける
+config = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
+broad = {g for g, e in config["genres"].items() if e.get("broad_on_purpose")}
+missing = [g for g in table
+           if g not in broad and not any(w in g or g in w for w in table[g])]
+check("ジャンル名に対応する必須語がある（無いなら印が要る）", missing == [], missing)
+check("印を付けたジャンルは、自分の名前を必須語に入れていない",
+      all(g not in table[g] for g in broad), sorted(broad))
+# 印が形骸化していないか。広いぶん、必須語は多めに要る
+check("印を付けたジャンルほど必須語を多く持つ",
+      all(len(table[g]) >= 10 for g in broad),
+      {g: len(table[g]) for g in broad})
 
 print(f"\n結果: {PASS} pass / {FAIL} fail")
 sys.exit(0 if FAIL == 0 else 1)
