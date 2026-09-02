@@ -22,7 +22,9 @@ from datetime import datetime
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from common import BASE_DIR, DATA_FILE, JST, now_jst_iso, parse_timestamp  # noqa: E402
+from common import (  # noqa: E402
+    BASE_DIR, CONFIG_FILE, DATA_FILE, JST, now_jst_iso, parse_timestamp,
+)
 
 # GitHub Pages は main ブランチの /docs をそのまま配信できるので、ここに出す
 OUTPUT_FILE = BASE_DIR / "docs" / "index.html"
@@ -34,6 +36,11 @@ VELOCITY_FLOOR_HOURS = 6.0
 # 無制限にするとHTMLが際限なく太り、GitHubの1ファイル上限に当たって更新が止まる。
 DEFAULT_MAX_AGE_DAYS = 180
 DEFAULT_MAX_POSTS = 1500
+
+# 各ジャンルに必ず確保する枠。
+# 上限を全体の順位だけで切ると、いいね数の絶対値が大きいジャンル（ダイエットなど）が
+# 枠を食い切り、ニッチなジャンル（神経エステなど）がページから消える。
+DEFAULT_PER_GENRE = 80
 
 
 def build_rows(store, now=None):
@@ -82,13 +89,43 @@ def embed_json(data):
     )
 
 
-def select_rows(rows, max_age_days, max_posts):
+def take_top(rows, quota, chosen):
+    """
+    rows の上位 quota 件を chosen（id → 行）に足す。すでに入っている分も枠に数える。
+
+    いいね順だけで切ると「新しくて急上昇中だがまだ総数が少ない投稿」が落ちる。
+    逆に伸び順だけで切ると定番の強い投稿が落ちる。そこで両方の上位を
+    半分ずつ確保してから、残りをいいね順で埋める。
+    """
+    if quota <= 0:
+        return
+    already = sum(1 for r in rows if r["id"] in chosen)
+    room = quota - already
+    if room <= 0:
+        return
+
+    half = room // 2
+    by_likes = sorted(rows, key=lambda r: -r["likes"])
+    by_velocity = sorted(rows, key=lambda r: -r["velocity"])
+
+    added = 0
+    for pool, limit in ((by_velocity, half), (by_likes, room)):
+        for r in pool:
+            if added >= limit:
+                break
+            if r["id"] in chosen:
+                continue
+            chosen[r["id"]] = r
+            added += 1
+
+
+def select_rows(rows, max_age_days, max_posts, per_genre=DEFAULT_PER_GENRE):
     """
     ページに載せる投稿を選ぶ。返り値は (選んだ行, 期間外で外した数, 上限で外した数)。
 
-    件数を絞るとき、いいね順だけで切ると「新しくて急上昇中だがまだ総数が
-    少ない投稿」が落ちてしまう。逆に伸び順だけで切ると定番の強い投稿が
-    落ちる。そこで両方の上位を半分ずつ確保してから、残りをいいね順で埋める。
+    全体の順位だけで上限まで切ると、いいね数の絶対値が大きいジャンルが枠を
+    食い切り、ニッチなジャンルがページから丸ごと消える。そこで先に
+    ジャンルごとの枠を確保し、残りを全体の上位で埋める。
     """
     if max_age_days > 0:
         limit_hours = max_age_days * 24
@@ -101,22 +138,44 @@ def select_rows(rows, max_age_days, max_posts):
     if max_posts <= 0 or len(in_window) <= max_posts:
         return in_window, aged_out, 0
 
-    half = max_posts // 2
-    by_likes = sorted(in_window, key=lambda r: -r["likes"])
-    by_velocity = sorted(in_window, key=lambda r: -r["velocity"])
+    # --- 1. ジャンルごとの枠 ---
+    by_genre = {}
+    for r in in_window:
+        for g in r.get("genres") or []:
+            by_genre.setdefault(g, []).append(r)
 
     chosen = {}
-    for r in by_velocity[:half]:
-        chosen[r["id"]] = r
-    for r in by_likes[:half]:
-        chosen[r["id"]] = r
-    for r in by_likes:
-        if len(chosen) >= max_posts:
-            break
-        chosen.setdefault(r["id"], r)
+    if per_genre > 0 and by_genre:
+        # 枠の合計が上限を超えるとジャンルの並び順で後ろが切り捨てられる。
+        # そうならないよう、超えるときは全ジャンルを均等に縮める。
+        quota = min(per_genre, max(1, max_posts // len(by_genre)))
+        # 件数の少ないジャンルから埋める。多いジャンルが先に枠を取ると、
+        # 掛け持ち投稿で少ないジャンルの枠が食われて0件になりうる。
+        for _, genre_rows in sorted(by_genre.items(), key=lambda kv: len(kv[1])):
+            if len(chosen) >= max_posts:
+                break
+            take_top(genre_rows, quota, chosen)
 
-    selected = list(chosen.values())
+    # --- 2. 残りを全体の上位で埋める ---
+    take_top(in_window, max_posts, chosen)
+
+    selected = list(chosen.values())[:max_posts]
     return selected, aged_out, len(in_window) - len(selected)
+
+
+def load_config_genres(path):
+    """
+    設定にあるジャンル名を、書かれた順に返す。
+
+    ページには「まだ集まっていないジャンル」も出す。データにあるものだけを
+    並べると、ローテーションで今日まだ回っていないジャンルが消えてしまい、
+    対象が狭まったように見えるため。読めなければ空を返し、データ側だけで組む。
+    """
+    try:
+        config = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    return list(config.get("genres", {}))
 
 
 def rising_threshold(rows):
@@ -131,17 +190,25 @@ def rising_threshold(rows):
     return values[index]
 
 
-def build_summary(rows, store, archived):
+def build_summary(rows, store, archived, config_genres=()):
     """一覧の上に出す集計。詳細より先に全体像が分かるようにする。"""
-    genres = {}
+    counts = {}
     for r in rows:
         for g in r["genres"]:
-            genres[g] = genres.get(g, 0) + 1
+            counts[g] = counts.get(g, 0) + 1
+
+    # 集まっているものを件数の多い順に、まだ0件のものを設定に書いた順で後ろに置く。
+    # 「今どのジャンルが強いか」が先に見え、未収集は下にまとまって読みやすい。
+    collected = sorted(
+        ((g, n) for g, n in counts.items() if n > 0), key=lambda kv: (-kv[1], kv[0])
+    )
+    pending = [(g, 0) for g in config_genres if counts.get(g, 0) == 0]
+
     week = [r for r in rows if r["ageHours"] is not None and r["ageHours"] <= 168]
     return {
         "total": len(rows),
         "archived": archived,
-        "genres": sorted(genres.items(), key=lambda kv: -kv[1]),
+        "genres": collected + pending,
         "over1000": len([r for r in rows if r["likes"] >= 1000]),
         "thisWeek": len(week),
         "authors": len({r["username"] for r in rows}),
@@ -149,17 +216,20 @@ def build_summary(rows, store, archived):
     }
 
 
-def render_html(rows, generated_at, store, archived):
-    genres = sorted({g for r in rows for g in r["genres"]})
+def render_html(rows, generated_at, store, archived, config_genres=()):
+    summary = build_summary(rows, store, archived, config_genres)
+    # チップの並びは下の「ジャンル別」の棒グラフと揃える
+    genres = [[name, count] for name, count in summary["genres"]]
     keywords = sorted({k for r in rows for k in r["keywords"]})
 
     return (
         TEMPLATE.replace("__DATA__", embed_json(rows))
         .replace("__GENRES__", embed_json(genres))
         .replace("__KEYWORDS__", embed_json(keywords))
-        .replace("__SUMMARY__", embed_json(build_summary(rows, store, archived)))
+        .replace("__SUMMARY__", embed_json(summary))
         .replace("__RISING__", str(round(rising_threshold(rows), 4)))
         .replace("__GENERATED__", generated_at)
+        .replace("__GENRE_COUNT__", str(len(genres)))
         .replace("__COUNT__", str(len(rows)))
     )
 
@@ -169,7 +239,7 @@ TEMPLATE = r"""
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <!-- 公開リポジトリで配信するため、検索結果には出さない -->
 <meta name="robots" content="noindex, nofollow">
-<title>Threads Research Tool（薄毛、育毛、フェイシャル ver）</title>
+<title>Threads Research Tool（美容ジャンル ver）</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Zen+Old+Mincho:wght@600;900&family=Roboto+Mono:wght@400;500;700&display=swap">
@@ -297,13 +367,24 @@ TEMPLATE = r"""
     font-size: .7rem; color: var(--muted); letter-spacing: .06em;
     margin: 0 0 11px; white-space: nowrap;
   }
+  /* 名前の列は固定幅。名前に合わせて伸ばすと、長いジャンルの行だけ棒の
+     開始位置がずれて、棒どうしの長さを目で比べられなくなる。
+     収まらない名前は「・」の位置で2行に折る（折り位置は .nb で決め打ち）。
+     8.5em は最長の区切り「リラクゼーション」8文字が1行に収まる幅。 */
   .bar-row {
     display: grid;
-    grid-template-columns: 6.5em 1fr auto;
+    grid-template-columns: 8.5em 1fr auto;
     gap: 12px; align-items: center;
   }
   .bar-row + .bar-row { margin-top: 8px; }
-  .bar-name { font-size: .76rem; white-space: nowrap; }
+  /* 1行で収まる名前も2行の名前と同じ高さにする。混ざると行の間隔が
+     ばらついて、棒の並びが読みにくくなる。
+     flex にしているのは、折り返した2行をまとめて上下中央に置くため。 */
+  .bar-name {
+    font-size: .76rem; line-height: 1.4;
+    min-height: 2.8em;
+    display: flex; flex-wrap: wrap; align-content: center;
+  }
   .bar-track {
     height: 6px; border-radius: 999px;
     background: var(--chip); overflow: hidden;
@@ -315,7 +396,16 @@ TEMPLATE = r"""
     font-variant-numeric: tabular-nums; white-space: nowrap;
   }
   @media (max-width: 620px) {
-    .bar-row { grid-template-columns: 5.5em 1fr auto; gap: 9px; }
+    /* 幅は変えない。変えると狭い画面だけ折り返し位置が変わってしまう */
+    .bar-row { gap: 9px; }
+  }
+  /* まだ集まっていないジャンル。対象には入っているので消さず、弱く見せる */
+  .bar-row.pending .bar-name { color: var(--muted); }
+  .bar-row.pending .bar-track { opacity: .55; }
+  /* 「収集待ち」は日本語なので、等幅フォントに任せず本文と同じ書体で出す */
+  .bar-row.pending .bar-count {
+    font-family: "Hiragino Sans", "Noto Sans JP", sans-serif;
+    font-size: .7rem;
   }
   .stat-label {
     font-size: .7rem; color: var(--muted); letter-spacing: .06em;
@@ -356,6 +446,7 @@ TEMPLATE = r"""
   }
   input[type=search] { flex: 1; min-width: 180px; }
   .chip {
+    display: inline-flex; align-items: baseline; gap: 6px;
     font-size: .78rem; padding: 5px 13px;
     border: 1px solid var(--border); border-radius: 999px;
     background: var(--surface); color: var(--muted);
@@ -366,6 +457,14 @@ TEMPLATE = r"""
     background: var(--accent-soft); border-color: var(--accent);
     color: var(--accent); font-weight: 700;
   }
+  /* ジャンル名は途中で割らない。「ダイエット」を「ダイ」と「エット」に分けない */
+  .chip-name { white-space: nowrap; }
+  /* まだ1件も無いジャンル。押しても空振りするので、選べないことを見た目で示す */
+  .chip.pending {
+    opacity: .45; cursor: default;
+    border-style: dashed;
+  }
+  .chip.pending:hover { border-color: var(--border); color: var(--muted); }
   .count {
     white-space: nowrap;
     font-family: "Roboto Mono", ui-monospace, monospace;
@@ -439,7 +538,7 @@ TEMPLATE = r"""
 
 <div class="wrap">
   <header>
-    <h1>Threads Research Tool<span class="ver"><span class="nb">（薄毛、</span><span class="nb">育毛、</span><span class="nb">フェイシャル ver）</span></span></h1>
+    <h1>Threads Research Tool<span class="ver"><span class="nb">美容ジャンル全般</span><span class="nb">（__GENRE_COUNT__ジャンル）</span></span></h1>
   </header>
 
   <div class="panel">
@@ -540,9 +639,20 @@ TEMPLATE = r"""
     els.breakdown.appendChild(mk('p', 'breakdown-title', 'ジャンル別'));
     var max = SUMMARY.genres.reduce(function (m, p) { return Math.max(m, p[1]); }, 0);
 
+    // 「神経エステ・リラクゼーション」は固定幅の列に1行では収まらない。
+    // 「・」の位置だけで折り、カタカナ語の途中では絶対に割らない。
+    function nameParts(name) {
+      var parts = name.split('・');
+      return parts.map(function (t, i) {
+        // 「・」は前の語にくっつける。行頭に落とさないため
+        return i < parts.length - 1 ? t + '・' : t;
+      });
+    }
+
     SUMMARY.genres.forEach(function (pair) {
       var row = mk('div', 'bar-row');
-      row.appendChild(mk('span', 'bar-name', pair[0]));
+      if (pair[1] === 0) row.classList.add('pending');
+      row.appendChild(phrases(mk('span', 'bar-name'), nameParts(pair[0])));
 
       var track = mk('div', 'bar-track');
       var fill = mk('div', 'bar-fill');
@@ -550,7 +660,9 @@ TEMPLATE = r"""
       track.appendChild(fill);
       row.appendChild(track);
 
-      row.appendChild(mk('span', 'bar-count', pair[1].toLocaleString() + ' 件'));
+      // 数字は出さない。棒の長さで強弱は足りる。
+      // まだ集まっていないものだけ、空の棒の理由が分かるよう言葉を添える
+      row.appendChild(mk('span', 'bar-count', pair[1] === 0 ? '収集待ち' : ''));
       els.breakdown.appendChild(row);
     });
   })();
@@ -574,20 +686,60 @@ TEMPLATE = r"""
     els.keyword.appendChild(o);
   });
 
-  GENRES.forEach(function (g) {
-    var b = mk('span', 'chip', g);
-    b.tabIndex = 0;
-    var toggle = function () {
-      if (activeGenres.has(g)) { activeGenres.delete(g); b.classList.remove('on'); }
-      else { activeGenres.add(g); b.classList.add('on'); }
-      render();
-    };
-    b.addEventListener('click', toggle);
-    b.addEventListener('keydown', function (e) {
-      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(); }
-    });
+  // --- ジャンルの絞り込み ---
+  // 対象の10ジャンルを全部並べる。ローテーションで今日まだ回っていないジャンルを
+  // 隠すと、扱う範囲が狭まったように見えるため。
+  // ジャンルが10個並ぶので、どれを押したか数えなくても戻れる「すべて」を先頭に置く。
+  var chipStates = [];
+
+  function makeChip(label, onActivate) {
+    var b = mk('span', 'chip');
+    b.appendChild(mk('span', 'chip-name', label));
+    if (onActivate) {
+      b.tabIndex = 0;
+      b.setAttribute('role', 'button');
+      b.addEventListener('click', onActivate);
+      b.addEventListener('keydown', function (e) {
+        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onActivate(); }
+      });
+    } else {
+      // 1件も無いので押しても何も起きない。操作対象から外す
+      b.classList.add('pending');
+      b.setAttribute('aria-disabled', 'true');
+      b.title = 'まだ収集していません';
+    }
     els.genres.appendChild(b);
+    return b;
+  }
+
+  function syncChips() {
+    chipStates.forEach(function (s) {
+      var on = s.isOn();
+      s.el.classList.toggle('on', on);
+      s.el.setAttribute('aria-pressed', on ? 'true' : 'false');
+    });
+  }
+
+  var allChip = makeChip('すべて', function () {
+    activeGenres.clear();
+    syncChips();
+    render();
   });
+  chipStates.push({ el: allChip, isOn: function () { return activeGenres.size === 0; } });
+
+  GENRES.forEach(function (pair) {
+    var g = pair[0];
+    if (pair[1] === 0) { makeChip(g, null); return; }
+    var chip = makeChip(g, function () {
+      if (activeGenres.has(g)) activeGenres.delete(g);
+      else activeGenres.add(g);
+      syncChips();
+      render();
+    });
+    chipStates.push({ el: chip, isOn: function () { return activeGenres.has(g); } });
+  });
+
+  syncChips();
 
   function fmtAge(h) {
     if (h === null || h === undefined) return '不明';
@@ -699,6 +851,10 @@ def main():
                         help="この日数より古い投稿はページに載せない（0で無制限）")
     parser.add_argument("--max-posts", type=int, default=DEFAULT_MAX_POSTS,
                         help="ページに載せる最大件数（0で無制限）")
+    parser.add_argument("--per-genre", type=int, default=DEFAULT_PER_GENRE,
+                        help="各ジャンルに必ず確保する件数（0で枠取りなし）")
+    parser.add_argument("--config", type=Path, default=CONFIG_FILE,
+                        help="ジャンル一覧を読む設定ファイル")
     args = parser.parse_args()
 
     if not args.input.exists():
@@ -708,10 +864,15 @@ def main():
 
     store = json.loads(args.input.read_text(encoding="utf-8"))
     all_rows = build_rows(store)
-    rows, aged_out, over_cap = select_rows(all_rows, args.max_age_days, args.max_posts)
+    rows, aged_out, over_cap = select_rows(
+        all_rows, args.max_age_days, args.max_posts, args.per_genre
+    )
     rows.sort(key=lambda r: r["likes"], reverse=True)
 
-    html = render_html(rows, now_jst_iso()[:16].replace("T", " "), store, len(all_rows))
+    config_genres = load_config_genres(args.config)
+    html = render_html(
+        rows, now_jst_iso()[:16].replace("T", " "), store, len(all_rows), config_genres
+    )
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(html, encoding="utf-8")

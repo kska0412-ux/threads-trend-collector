@@ -46,14 +46,67 @@ per.value = '0'; fire(per, 'change');
 check('全期間に戻すと8件', n() === 8, n());
 
 console.log('--- 4. ジャンル絞り込み ---');
+const chipName = c => c.querySelector('.chip-name').textContent;
+const click = c => c.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
 const chips = [...doc.querySelectorAll('.chip')];
-check('chipは3ジャンル', chips.length === 3, chips.map(c=>c.textContent));
-const facial = chips.find(c => c.textContent === 'フェイシャル');
-facial.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
-check('フェイシャルのみ3件', n() === 3, { count: n(), users: users() });
+const pending = chips.filter(c => c.classList.contains('pending'));
+
+// 対象は10ジャンル。ローテーションで今日まだ回っていないジャンルを隠すと、
+// 扱う範囲が狭まったように見えてしまう
+check('「すべて」＋設定の10ジャンルで11個', chips.length === 11, chips.map(chipName));
+check('先頭が「すべて」', chipName(chips[0]) === 'すべて', chipName(chips[0]));
+check('データが無い7ジャンルも並ぶ', pending.length === 7, pending.map(chipName));
+check('データがある3ジャンルは選べる',
+      chips.length - 1 - pending.length === 3,
+      chips.filter(c => !c.classList.contains('pending')).map(chipName));
+check('件数の数字は出さない', doc.querySelector('.chip-n') === null, doc.querySelector('.chip-n'));
+check('データがあるジャンルが先に並ぶ',
+      chips.slice(1, 4).every(c => !c.classList.contains('pending')),
+      chips.slice(1, 4).map(chipName));
+check('未収集は押せないことが伝わる',
+      pending.every(c => c.getAttribute('aria-disabled') === 'true' && !c.hasAttribute('tabindex')),
+      pending.map(c => [chipName(c), c.getAttribute('aria-disabled'), c.getAttribute('tabindex')]));
+// 未選択のときは「すべて」が点いている。10ジャンルあると、どれも押していない状態が
+// 分かりにくくなるため
+check('初期状態は「すべて」が点灯', chips[0].classList.contains('on'), chips[0].className);
+
+// 押しても何も起きないこと。空振りで0件になるのが一番まずい
+click(pending[0]);
+check('未収集chipを押しても表示は変わらない', n() === 8, { count: n(), chip: chipName(pending[0]) });
+check('未収集chipは点灯しない', !pending[0].classList.contains('on'), pending[0].className);
+
+const facial = chips.find(c => chipName(c) === 'フェイシャル・小顔');
+click(facial);
+check('フェイシャル・小顔のみ3件', n() === 3, { count: n(), users: users() });
 check('chipにonクラス', facial.classList.contains('on'), facial.className);
-facial.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
-check('解除で8件に戻る', n() === 8, n());
+check('選択中は「すべて」が消灯', !chips[0].classList.contains('on'), chips[0].className);
+check('aria-pressedが連動する', facial.getAttribute('aria-pressed') === 'true',
+      facial.getAttribute('aria-pressed'));
+
+// 複数ジャンルはOR。押した分だけ増える
+const hage = chips.find(c => chipName(c) === '薄毛');
+click(hage);
+check('2ジャンル選ぶとOR（6件）', n() === 6, { count: n(), users: users() });
+
+// 「すべて」で一括解除できる。10ジャンルを押し戻して回らずに済む
+click(chips[0]);
+check('「すべて」で解除して8件に戻る', n() === 8, n());
+check('解除後はジャンルchipが全部消灯',
+      chips.slice(1).every(c => !c.classList.contains('on')),
+      chips.slice(1).map(c => c.className));
+check('解除後は「すべて」が点灯', chips[0].classList.contains('on'), chips[0].className);
+
+// キーボードでも操作できる
+facial.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+check('Enterキーでも絞り込める', n() === 3, n());
+click(facial);
+check('もう一度押すと解除される', n() === 8, n());
+
+console.log('--- 4b. 見出しのジャンル数 ---');
+// データにある数ではなく、設定にある数を出す。でないと収集が一周する前は
+// 対象が3ジャンルだけに見えてしまう
+const verText = doc.querySelector('.ver').textContent;
+check('設定の10ジャンルを名乗る', verText.includes('10ジャンル'), verText);
 
 console.log('--- 5. キーワード絞り込み ---');
 const kwEl = doc.getElementById('keyword');
@@ -87,8 +140,9 @@ check('タイルはちょうど4枚', tiles.length === 4, tiles.length);
 const labels = tiles.map(t => t.querySelector('.stat-label').textContent);
 check('表示件数のタイルがある', labels.includes('表示中の投稿'), labels);
 // ジャンルをタイルに混ぜると枚数が変わり、最後の1枚が取り残される
+const genreNames = [...doc.querySelectorAll('.chip-name')].map(e => e.textContent);
 check('ジャンルはタイルに混ざっていない',
-      !labels.some(l => ['薄毛', '育毛', 'フェイシャル'].includes(l)), labels);
+      !labels.some(l => genreNames.includes(l)), { labels, genreNames });
 check('列数が固定（auto-fitではない）',
       /\.summary\s*\{[^}]*grid-template-columns:\s*repeat\(4,\s*1fr\)/s.test(css9), null);
 check('4枚は4列で割り切れる', 4 % 4 === 0, null);
@@ -111,14 +165,50 @@ check('絞り込んでいない版では蓄積件数を出さない', !stampText
 
 console.log('--- 9b. ジャンル別の横棒 ---');
 const bars = [...doc.querySelectorAll('.bar-row')];
-check('ジャンルの数だけ棒が並ぶ', bars.length === 3, bars.length);
+const barName = b => b.querySelector('.bar-name').textContent;
+const pendingBars = bars.filter(b => b.classList.contains('pending'));
+check('設定の10ジャンルぶん棒が並ぶ', bars.length === 10, bars.map(barName));
 check('見出しが出る', doc.querySelector('.breakdown-title').textContent === 'ジャンル別', null);
+check('未収集は7本', pendingBars.length === 7, pendingBars.map(barName));
 const widths = bars.map(b => parseFloat(b.querySelector('.bar-fill').style.width));
 check('最多ジャンルが100%', Math.max(...widths) === 100, widths);
 check('棒の長さが件数順に並ぶ', widths.every((w, i) => i === 0 || widths[i - 1] >= w), widths);
-check('件数が数字で出る', bars.every(b => /^\d+ 件$/.test(b.querySelector('.bar-count').textContent)),
+check('未収集の棒は長さ0', pendingBars.every(b => parseFloat(b.querySelector('.bar-fill').style.width) === 0),
+      pendingBars.map(b => b.querySelector('.bar-fill').style.width));
+// 数字は出さない。棒の長さで強弱は足りる
+check('件数の数字は出さない',
+      bars.filter(b => !b.classList.contains('pending')).every(b => b.querySelector('.bar-count').textContent === ''),
       bars.map(b => b.querySelector('.bar-count').textContent));
-check('ジャンル名が途中で割れない', /\.bar-name\s*\{[^}]*white-space:\s*nowrap/s.test(css9), null);
+check('未収集だけ理由を添える',
+      pendingBars.every(b => b.querySelector('.bar-count').textContent === '収集待ち'),
+      pendingBars.map(b => b.querySelector('.bar-count').textContent));
+// 名前の長さで列幅が変わると、棒の開始位置が行ごとにずれて長さを比べられない
+check('名前の列が固定幅',
+      /\.bar-row\s*\{[^}]*grid-template-columns:\s*8\.5em 1fr auto/s.test(css9), null);
+// 画面幅で列幅を変えると、狭い画面だけ折り返し位置が変わってしまう
+const barCols = css9.replace(/\/\*[\s\S]*?\*\//g, '').match(/\.bar-row\s*\{[^}]*grid-template-columns/gs) || [];
+check('列幅の指定は1か所だけ', barCols.length === 1, barCols);
+// 1行の名前と2行の名前が混ざると、行の間隔がばらついて棒を比べにくい
+check('1行の名前でも2行ぶんの高さを取る',
+      /\.bar-name\s*\{[^}]*min-height:\s*2\.8em/s.test(css9), null);
+check('折り返した名前が上下中央に来る',
+      /\.bar-name\s*\{[^}]*align-content:\s*center/s.test(css9), null);
+// 長い名前は「・」の位置だけで2行に折る。カタカナ語の途中では割らない
+const longBar = bars.find(b => barName(b) === '神経エステ・リラクゼーション');
+check('長いジャンル名の行がある', longBar !== undefined, bars.map(barName));
+const longUnits = [...longBar.querySelectorAll('.nb')].map(e => e.textContent);
+check('2つに分かれている', longUnits.length === 2, longUnits);
+check('「・」の位置で分かれる',
+      longUnits[0] === '神経エステ・' && longUnits[1] === 'リラクゼーション', longUnits);
+check('「・」が行頭に来ない', longUnits.every(u => !u.startsWith('・')), longUnits);
+check('全文が .nb の中に収まっている', longUnits.join('') === barName(longBar),
+      { units: longUnits.join(''), all: barName(longBar) });
+const shortBar = bars.find(b => barName(b) === '薄毛');
+check('「・」の無い名前は1かたまり',
+      shortBar.querySelectorAll('.nb').length === 1, shortBar.innerHTML);
+check('どの名前も途中で割れない仕組みに乗っている',
+      bars.every(b => [...b.querySelectorAll('.bar-name .nb')].map(e => e.textContent).join('') === barName(b)),
+      bars.map(barName));
 
 console.log('--- 10. 伸び中の表示 ---');
 const badges = [...doc.querySelectorAll('.badge')];

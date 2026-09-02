@@ -13,8 +13,16 @@ Threads から投稿を集めて data/posts.json に蓄積する。
 初回だけログインが要る:
   python3 scripts/collect.py --login
 
+ジャンルが増えても1回の実行時間を一定に保つため、既定ではローテーションする:
+  全キーワードを config/keywords.json の順に一列に並べ、前回の続きから
+  --batch 語だけ処理する。1日3回の実行で全ジャンルを一周する。
+  進み具合は data/rotation.json に残る。
+
 収集:
-  python3 scripts/collect.py
+  python3 scripts/collect.py                       # 続きから17語
+  python3 scripts/collect.py --missing             # まだ0件のジャンルだけ埋める
+  python3 scripts/collect.py --all                 # 全ジャンル（数時間かかる）
+  python3 scripts/collect.py --genre 脱毛          # 1ジャンルだけ今すぐ
   python3 scripts/collect.py --limit 3 --headful   # 試運転（3キーワードだけ画面を見ながら）
   python3 scripts/collect.py --dry-run             # 保存せず件数だけ確認
 """
@@ -33,6 +41,16 @@ from common import BASE_DIR, CONFIG_FILE, DATA_FILE, now_jst_iso  # noqa: E402
 
 SCRAPER = BASE_DIR / "scripts" / "scrape.mjs"
 RAW_FILE = BASE_DIR / "data" / "raw_latest.json"
+
+# ローテーションの進み具合と、今回の分だけを書き出した設定ファイル。
+# どちらも data/ 配下なので .gitignore に入っていて、公開リポジトリには出ない。
+ROTATION_FILE = BASE_DIR / "data" / "rotation.json"
+BATCH_FILE = BASE_DIR / "data" / "_batch_keywords.json"
+
+# 1回の実行で処理するキーワード数。
+# 全ジャンルを毎回回すと、1語あたり最悪3分（リトライ＋90秒タイムアウト）なので
+# 50語で4時間を超える。1日3回の実行で丁度一周する数にしてある。
+DEFAULT_BATCH = 17
 
 # 保存する投稿フィールド。スクレイパが返すキーと一致させてある。
 POST_FIELDS = ("id", "text", "username", "timestamp", "permalink", "like_count")
@@ -98,6 +116,99 @@ def merge_posts(store, api_posts, genre, keyword, collected_at):
         updated_count += 1
 
     return new_count, updated_count
+
+
+def build_pairs(config):
+    """
+    設定を [(ジャンル, キーワード), ...] に開く。
+    設定ファイルに書いた順序が、そのまま収集の順序になる。
+    """
+    pairs = []
+    for genre, entry in config.get("genres", {}).items():
+        # 旧形式（配列そのもの）も読めるようにしておく
+        keywords = entry if isinstance(entry, list) else entry.get("keywords", [])
+        for keyword in keywords:
+            pairs.append((genre, keyword))
+    return pairs
+
+
+def genres_with_data(store):
+    """蓄積に1件でもある ジャンル名の集合を返す。"""
+    seen = set()
+    for post in store.get("posts", {}).values():
+        seen.update(post.get("genres") or [])
+    return seen
+
+
+def load_rotation():
+    """前回どこまで進んだかを読む。無い・壊れているなら空を返して先頭から始める。"""
+    if not ROTATION_FILE.exists():
+        return {}
+    try:
+        state = json.loads(ROTATION_FILE.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return {}
+    return state if isinstance(state, dict) else {}
+
+
+def save_rotation(genre, keyword):
+    """次回の開始位置を記録する。書き込み中の中断で壊さないよう一時ファイル経由。"""
+    ROTATION_FILE.parent.mkdir(parents=True, exist_ok=True)
+    tmp = ROTATION_FILE.with_suffix(".json.tmp")
+    tmp.write_text(
+        json.dumps(
+            {"last_genre": genre, "last_keyword": keyword, "updated_at": now_jst_iso()},
+            ensure_ascii=False, indent=2,
+        ),
+        encoding="utf-8",
+    )
+    tmp.replace(ROTATION_FILE)
+
+
+def select_batch(pairs, state, batch):
+    """
+    今回処理する分を、前回の続きから batch 件だけ切り出す。
+    末尾まで来たら先頭に戻る。返り値は (切り出した組, 開始位置)。
+
+    位置の番号ではなく「前回最後に処理したキーワード」を覚えて探し直している。
+    設定ファイルにジャンルを足し引きしても位置がずれず、見つからなければ
+    先頭から再開するだけで済むため。
+    """
+    if not pairs:
+        return [], 0
+    if batch <= 0 or batch >= len(pairs):
+        return list(pairs), 0
+
+    last = (state.get("last_genre"), state.get("last_keyword"))
+    try:
+        start = (pairs.index(last) + 1) % len(pairs)
+    except ValueError:
+        start = 0
+
+    doubled = pairs + pairs
+    return doubled[start:start + batch], start
+
+
+def write_batch_config(config, batch_pairs, path):
+    """
+    今回処理する分だけを抜き出した設定ファイルを書く。scrape.mjs はこれを読む。
+    required_any は元の設定から引き継ぐので、関連度フィルタの強さは変わらない。
+    返り値は書き出したジャンルの辞書（画面表示に使う）。
+    """
+    source = config.get("genres", {})
+    genres = {}
+    for genre, keyword in batch_pairs:
+        entry = source.get(genre, {})
+        required = [] if isinstance(entry, list) else entry.get("required_any", [])
+        slot = genres.setdefault(genre, {"keywords": [], "required_any": required})
+        if keyword not in slot["keywords"]:
+            slot["keywords"].append(keyword)
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps({"genres": genres}, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    return genres
 
 
 def load_required_any():
@@ -178,9 +289,15 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--login", action="store_true",
                         help="ブラウザを開いてThreadsにログインする（初回のみ）")
-    parser.add_argument("--genre", help="このジャンルのみ収集する")
+    parser.add_argument("--genre", help="このジャンルのみ収集する（ローテーションは進めない）")
+    parser.add_argument("--all", action="store_true",
+                        help="ローテーションせず全ジャンルを1回で回す（数時間かかる）")
+    parser.add_argument("--missing", action="store_true",
+                        help="まだ1件も集まっていないジャンルだけ収集する")
+    parser.add_argument("--batch", type=int, default=DEFAULT_BATCH,
+                        help=f"1回で処理するキーワード数（既定{DEFAULT_BATCH}／0で全部）")
     parser.add_argument("--limit", type=int, default=0,
-                        help="先頭N個のキーワードだけ処理する（試運転用）")
+                        help="先頭N個のキーワードだけ処理する（試運転用。ローテーションは進めない）")
     parser.add_argument("--delay", type=float, default=5.0,
                         help="キーワード間の待機秒数（既定5秒）")
     parser.add_argument("--headful", action="store_true", help="ブラウザを表示する")
@@ -203,21 +320,52 @@ def main():
             raise SystemExit(f"指定されたファイルがありません: {raw_path}")
     else:
         node = require_node()
-        keywords_file = CONFIG_FILE
+        config = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
+        pairs = build_pairs(config)
+        if not pairs:
+            raise SystemExit(f"キーワードが1つもありません: {CONFIG_FILE}")
+
+        # --- 今回どこを回すか決める ---
         if args.genre:
-            config = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
             if args.genre not in config.get("genres", {}):
-                raise SystemExit(f"ジャンル '{args.genre}' が {CONFIG_FILE} にありません。")
-            keywords_file = BASE_DIR / "data" / "_genre_filter.json"
-            keywords_file.parent.mkdir(parents=True, exist_ok=True)
-            keywords_file.write_text(
-                json.dumps({"genres": {args.genre: config["genres"][args.genre]}},
-                           ensure_ascii=False),
-                encoding="utf-8",
-            )
+                raise SystemExit(
+                    f"ジャンル '{args.genre}' が {CONFIG_FILE} にありません。\n"
+                    f"  あるジャンル: {' / '.join(config.get('genres', {}))}"
+                )
+            batch_pairs = [p for p in pairs if p[0] == args.genre]
+            advance = False
+        elif args.missing:
+            # ジャンルを増やした直後、ローテーションが一周するのを待たずに
+            # 空のジャンルだけ埋めたいときに使う
+            have = genres_with_data(load_store())
+            batch_pairs = [p for p in pairs if p[0] not in have]
+            advance = False
+            if not batch_pairs:
+                raise SystemExit(
+                    "すべてのジャンルに1件以上あります。--missing で集めるものはありません。"
+                )
+            print(f"未収集の {len({g for g, _ in batch_pairs})} ジャンル / "
+                  f"{len(batch_pairs)} 語を処理します（--missing）")
+        elif args.all:
+            batch_pairs = pairs
+            advance = False
+            print(f"全 {len(pairs)} 語を1回で処理します（--all）。数時間かかります。")
+        else:
+            batch_pairs, start = select_batch(pairs, load_rotation(), args.batch)
+            advance = True
+            print(f"ローテーション: 全 {len(pairs)} 語のうち "
+                  f"{start + 1} 番目から {len(batch_pairs)} 語を処理します")
+
+        # 試運転で先頭だけ切ると、最後まで進んでいないのに位置だけ進んでしまう
+        if args.limit:
+            advance = False
+
+        genres = write_batch_config(config, batch_pairs, BATCH_FILE)
+        print("今回のジャンル: " + " / ".join(
+            f"{g}({len(v['keywords'])}語)" for g, v in genres.items()))
 
         scraper_args = [
-            "--keywords", str(keywords_file),
+            "--keywords", str(BATCH_FILE),
             "--out", str(RAW_FILE),
             "--delay", str(args.delay),
         ]
@@ -231,7 +379,15 @@ def main():
         code = run_scraper(node, scraper_args)
         if code != 0 or not RAW_FILE.exists():
             print("\n[NG] 収集に失敗しました。蓄積データは変更していません。")
+            if advance:
+                print("     ローテーションも進めていないので、次回は同じ範囲をやり直します。")
             return 1
+
+        # 一部のキーワードが失敗しても位置は進める。詰まったジャンルで
+        # 止まり続けると、その先のジャンルが永久に収集されなくなるため。
+        if advance and not args.dry_run:
+            save_rotation(*batch_pairs[-1])
+
         raw_path = RAW_FILE
 
     # --- マージ ---

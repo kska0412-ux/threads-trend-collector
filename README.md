@@ -1,6 +1,7 @@
 # Threads 伸びてる投稿コレクター
 
-薄毛 / 育毛 / フェイシャル 領域で伸びている Threads 投稿を集め、HTML 一覧にする。
+美容ジャンル全般（10ジャンル）で伸びている Threads 投稿を集め、HTML 一覧にする。
+ページ上でジャンルを選んで絞り込める。
 収集専用で、分析も文章生成もしない。LLM を使わないので API 課金は発生しない。
 
 > コマンドは1行ずつコピーして実行する。zsh は対話シェルだと `#` をコメントとして
@@ -56,14 +57,16 @@ open docs/index.html
 
 | コマンド | 意味 |
 |---|---|
-| `python3 scripts/collect.py --genre フェイシャル` | ジャンルを絞る |
+| `python3 scripts/collect.py --genre 脱毛` | 1ジャンルだけ今すぐ集める（ローテーションは進めない） |
+| `python3 scripts/collect.py --missing` | まだ1件も無いジャンルだけ埋める（ジャンルを増やした直後に使う） |
+| `python3 scripts/collect.py --all` | 全50語を1回で回す（最悪2.5時間かかる） |
+| `python3 scripts/collect.py --batch 25` | 1回で回す語数を変える（既定17） |
 | `python3 scripts/collect.py --limit 3` | 先頭3キーワードだけ（試運転） |
 | `python3 scripts/collect.py --headful` | ブラウザを表示して動きを見る |
 | `python3 scripts/collect.py --delay 10` | キーワード間の待機を10秒にする |
 | `python3 scripts/collect.py --dry-run` | 保存せず件数だけ見る |
 | `python3 scripts/collect.py --dump-dir data/dump` | 生レスポンスを保存（原因調査用） |
 | `python3 scripts/collect.py --no-filter` | 関連度フィルタを外して全部保存する |
-| `python3 scripts/collect.py --min-posts 10` | 取得件数がこれ未満ならやり直す（既定5） |
 
 ## 公開して自動更新する
 
@@ -132,10 +135,38 @@ bash scripts/publish.sh
 変化が無ければ何もしない。リモート未設定なら黙ってスキップするので、
 ローカル運用のままでも壊れない。
 
+## ジャンルのローテーション
+
+10ジャンル×5語＝50語ある。これを毎回全部回すと、1語あたり最悪3分（やり直し＋
+90秒タイムアウト）なので **1回2.5時間、1日3回で7.5時間** Mac が動きっぱなしになり、
+Threads 側からブロックされる危険も上がる。
+
+そこで既定では回さない。**全キーワードを `config/keywords.json` の順に一列に並べ、
+前回の続きから17語だけ処理する。** 1日3回の実行で全ジャンルを丁度一周する。
+
+- 1回の実行時間はジャンルを増やしても変わらない（最悪48分）
+- 進み具合は `data/rotation.json` に残る。壊れていても先頭から再開するだけで止まらない
+- 覚えているのは位置の番号ではなく「前回最後に処理したキーワード」なので、
+  設定ファイルの途中にジャンルを足しても順番がずれない
+- 収集に失敗した回は位置を進めない。次回に同じ範囲をやり直す
+- 1ジャンルの更新は1日1回になる。今すぐ集めたいジャンルは `--genre` で指定する
+
 ## 検索キーワードと関連度フィルタ
 
 `config/keywords.json` を編集する。ジャンルを増やしても収集・表示ともに追従する。
-キーワードを増やすほどアクセス回数が増えるので、1ジャンル5〜8個を目安にする。
+ここに書いた**順序がそのまま収集の順番**になるので、優先したいジャンルほど上に置く。
+語を増やしてもローテーションのおかげで1回の実行時間は変わらないが、一周に
+かかる日数が延びる（50語なら1日、75語なら1.5日）。1ジャンル5〜8個を目安にする。
+
+### ジャンル名を変えたとき
+
+蓄積済みの投稿には古いジャンル名が残り、ページに新旧のチップが両方並ぶ。
+名前を変えたら蓄積側も揃える。
+
+```bash
+python3 scripts/rename_genre.py --dry-run 育毛 育毛・頭皮ケア   # 件数だけ確認
+python3 scripts/rename_genre.py 育毛 育毛・頭皮ケア             # 実行（.bak に退避してから書く）
+```
 
 ```json
 {
@@ -174,6 +205,11 @@ Threads の検索は語の一致が緩く、たとえば `つむじ 薄い` で�
 | `data/posts.json` | **全履歴**。1件も捨てない | 際限なく増えるが Git 管理外なのでリポジトリは太らない |
 | `docs/index.html` | 直近180日 かつ 最大1500件 | 常に約1MBで頭打ち |
 
+1500件を全体の順位だけで切ると、いいね数の絶対値が大きいジャンル（ダイエットなど）が
+枠を食い切り、ニッチなジャンル（神経エステなど）がページから丸ごと消える。そこで
+**各ジャンルに80件の枠を先に確保**してから、残りを全体の上位で埋める。
+枠は `--per-genre` で変えられる（`0` で枠取りなし）。
+
 範囲は変えられる。
 
 ```bash
@@ -206,10 +242,11 @@ python3 scripts/build_html.py --max-age-days 90 --max-posts 800
 ## 構成
 
 ```
-config/keywords.json        検索キーワード定義
+config/keywords.json        検索キーワード定義（この順序が収集順）
 scripts/scrape.mjs          Playwright でブラウザを動かす
 scripts/extract.mjs         レスポンスJSONから投稿を抜き出す（純粋関数）
-scripts/collect.py          scrape.mjs を呼び、data/posts.json にマージ
+scripts/collect.py          ローテーションを決め、scrape.mjs を呼び、data/posts.json にマージ
+scripts/rename_genre.py     蓄積データのジャンル名を付け替える
 scripts/build_html.py       posts.json → docs/index.html
 scripts/run_collect.sh      収集→HTML生成→公開まで一息で実行（launchd から呼ばれる）
 scripts/publish.sh          docs/index.html を GitHub Pages へ push
@@ -247,8 +284,9 @@ python3 scripts/collect.py --limit 1 --dump-dir data/dump --headful
 bash tests/run.sh
 ```
 
-ブラウザも通信も使わずに、抽出ロジック・やり直し判定・マージ処理・HTML 生成・
-公開判定を検証する。GitHub には接続せず、ローカルのベアリポジトリを push 先にする。
+ブラウザも通信も使わずに、抽出ロジック・やり直し判定・マージ処理・ローテーション・
+表示範囲の絞り込み・HTML 生成・改行の作法・公開判定を、全238項目で検証する。
+GitHub には接続せず、ローカルのベアリポジトリを push 先にする。
 
 ## 注意
 

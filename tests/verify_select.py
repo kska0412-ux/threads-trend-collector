@@ -67,6 +67,53 @@ by_likes_only = sorted(veterans + [rising], key=lambda r: -r["likes"])[:10]
 check("いいね順だけだと急上昇が落ちる（採用しなかった方式）",
       "rising" not in {r["id"] for r in by_likes_only}, None)
 
+print("--- ジャンルごとの枠取り ---")
+
+
+def grow(rid, likes, velocity, genres):
+    r = row(rid, likes, velocity, 24)
+    r["genres"] = genres
+    return r
+
+
+# いいねの桁が違う2ジャンル。枠取りが無いと大きいほうが上限を食い切る
+big = [grow(f"big{i}", 10000 + i, 100.0, ["ダイエット"]) for i in range(50)]
+niche = [grow(f"nic{i}", 10 + i, 0.1, ["神経エステ"]) for i in range(50)]
+
+kept, aged, over = select_rows(big + niche, 180, 20, per_genre=0)
+seen = {g for r in kept for g in r["genres"]}
+check("枠取りなしだとニッチなジャンルが丸ごと消える（採用しなかった方式）",
+      "神経エステ" not in seen, sorted(seen))
+
+kept, aged, over = select_rows(big + niche, 180, 20, per_genre=8)
+counts = {}
+for r in kept:
+    for g in r["genres"]:
+        counts[g] = counts.get(g, 0) + 1
+check("枠取りありなら両ジャンルが残る", set(counts) == {"ダイエット", "神経エステ"}, counts)
+check("ニッチなジャンルが枠の数だけ残る", counts.get("神経エステ", 0) >= 8, counts)
+check("いいねの大きいジャンルは残りの枠も取る", counts.get("ダイエット", 0) > 8, counts)
+check("上限は守られる", len(kept) == 20, len(kept))
+check("同じ投稿が重複しない", len({r["id"] for r in kept}) == len(kept), len(kept))
+
+# 枠の合計が上限を超えるときは、ジャンルの並び順で後ろが切り捨てられてはいけない
+crowded = [grow(f"g{gi}p{i}", 100 - i, 1.0, [f"ジャンル{gi}"])
+           for gi in range(10) for i in range(20)]
+kept, aged, over = select_rows(crowded, 180, 15, per_genre=80)
+check("枠の合計が上限を超えるときは均等に縮む", len(kept) == 15, len(kept))
+check("縮んでも全ジャンルが1件以上残る",
+      len({g for r in kept for g in r["genres"]}) == 10,
+      sorted({g for r in kept for g in r["genres"]}))
+
+# 1つの投稿が複数ジャンルに属していても、枠を二重に使わない
+shared = [grow(f"sh{i}", 100 - i, 1.0, ["A", "B"]) for i in range(30)]
+kept, aged, over = select_rows(shared, 180, 10, per_genre=5)
+check("掛け持ち投稿でも上限を超えない", len(kept) == 10, len(kept))
+
+# ジャンルが付いていない蓄積データ（旧形式）でも落ちない
+kept, aged, over = select_rows([row(f"p{i}", i, i, 24) for i in range(50)], 180, 10)
+check("ジャンル無しのデータでも上限どおり", len(kept) == 10, len(kept))
+
 print("--- 期間と件数の併用 ---")
 mixed = [row(f"n{i}", i, i, 24) for i in range(20)] + [row(f"o{i}", 999, 999, 24 * 400) for i in range(20)]
 kept, aged, over = select_rows(mixed, 180, 5)

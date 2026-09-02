@@ -87,9 +87,13 @@ check("本文が空文字でも落ちない", is_relevant("", HAIR) is False, No
 
 print("--- 設定の読み込み ---")
 table = load_required_any()
-check("3ジャンルぶん読める", set(table) == {"薄毛", "育毛", "フェイシャル"}, list(table))
+# ジャンルは config/keywords.json で足し引きするので、数ではなく中身で確かめる
+check("設定にあるジャンルを全部読める", len(table) >= 3, list(table))
 check("薄毛の必須語が入っている", "つむじ" in table["薄毛"], table["薄毛"][:5])
-check("フェイシャルの必須語が入っている", "毛穴" in table["フェイシャル"], table["フェイシャル"][:5])
+check("毛穴・ニキビの必須語が入っている",
+      "毛穴" in table["毛穴・ニキビ"], table["毛穴・ニキビ"][:5])
+check("全ジャンルに必須語がある",
+      all(v for v in table.values()), [g for g, v in table.items() if not v])
 
 print(f"\n結果: {PASS} pass / {FAIL} fail")
 sys.exit(0 if FAIL == 0 else 1)

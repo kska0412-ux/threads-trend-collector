@@ -67,11 +67,37 @@ check('タグが途中で割れない', /\.tag\s*\{[^}]*white-space:\s*nowrap/s.
 check('伸び中バッジが途中で割れない', /\.badge\s*\{[^}]*white-space:\s*nowrap/s.test(css), null);
 check('元投稿リンクが途中で割れない', /\.link\s*\{[^}]*white-space:\s*nowrap/s.test(css), null);
 
-console.log('--- 5. 見出しのジャンル表記 ---');
-const verUnits = [...doc.querySelectorAll('.ver .nb')].map(e => e.textContent);
-check('読点の位置でだけ改行できる', verUnits.length === 3, verUnits);
+console.log('--- 5. 見出しの但し書き ---');
+const ver = doc.querySelector('.ver');
+const verUnits = [...ver.querySelectorAll('.nb')].map(e => e.textContent);
+check('文節ごとに分かれている', verUnits.length === 2, verUnits);
+check('全文が .nb の中に収まっている',
+      verUnits.join('') === ver.textContent, { units: verUnits.join(''), all: ver.textContent });
+// 行末に開き括弧を残さない／閉じ括弧と句読点を行頭に置かない
+check('括弧が行末・行頭で割れない',
+      verUnits.every(u => !/[（(「『]$/.test(u) && !/^[）)」』、。\s]/.test(u)), verUnits);
+check('ジャンル数と単位が離れない', verUnits.some(u => /\d+ジャンル/.test(u)), verUnits);
+
+console.log('--- 6. ジャンル別の横棒 ---');
+// 名前の長さで列幅が動くと、棒の開始位置が行ごとにずれる
+check('名前の列が固定幅',
+      /\.bar-row\s*\{[^}]*grid-template-columns:\s*8\.5em 1fr auto/s.test(css), null);
+const barUnits = [...doc.querySelectorAll('.bar-name .nb')].map(e => e.textContent);
+check('ジャンル名が文節ごとに分かれている', barUnits.length > 0, barUnits);
+check('「・」が行頭に来ない', barUnits.every(u => !u.startsWith('・')), barUnits);
+check('棒グラフに助詞始まりが無い',
+      barUnits.filter(t => PARTICLES.some(pt => t.startsWith(pt))).length === 0, barUnits);
+
+console.log('--- 7. ジャンルのチップ ---');
+// 「ダイエット・痩身」のような長いジャンル名が「ダイ」「エット」に割れないこと
 check('ジャンル名が途中で割れない',
-      verUnits.every(u => !/^[、\s]/.test(u)), verUnits);
+      /\.chip-name\s*\{[^}]*white-space:\s*nowrap/s.test(css), null);
+// 「収集待ち」が等幅フォントに落ちて崩れないこと
+check('収集待ちの表記が本文と同じ書体',
+      /\.bar-row\.pending\s+\.bar-count\s*\{[^}]*font-family/s.test(css), null);
+const chipNames = [...doc.querySelectorAll('.chip-name')].map(e => e.textContent.trim());
+check('チップに助詞始まりが無い',
+      chipNames.filter(t => PARTICLES.some(pt => t.startsWith(pt))).length === 0, chipNames);
 
 console.log(`\n結果: ${pass} pass / ${fail} fail`);
 process.exit(fail === 0 ? 0 : 1);
