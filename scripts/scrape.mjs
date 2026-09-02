@@ -146,6 +146,14 @@ async function collectKeyword(page, keyword, { dumpDir }) {
     }
   };
 
+  // 前のキーワードの検索結果が遅れて届き、次のキーワードに混ざることがある。
+  // 実測では「育毛」で取れた10件が全部「鍼灸」の投稿だった（関連度フィルタが
+  // 落としたので蓄積は汚れなかったが、フィルタが緩いジャンルでは通ってしまう）。
+  // 空ページへ移して、飛んでいる最中のリクエストを打ち切ってから始める。
+  await page.goto("about:blank", { waitUntil: "domcontentloaded", timeout: 30000 })
+    .catch(() => {});
+  await sleep(500);
+
   page.on("response", onResponse);
   try {
     await page.goto(SEARCH_URL(keyword), { waitUntil: "domcontentloaded", timeout: 90000 });

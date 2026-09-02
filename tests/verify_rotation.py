@@ -20,6 +20,7 @@ from collect import (  # noqa: E402
     RUNS_PER_DAY,
     auto_batch,
     build_pairs,
+    failed_pairs,
     genres_with_data,
     plan_batch,
     seen_from_store,
@@ -192,6 +193,23 @@ with tempfile.TemporaryDirectory() as tmp:
     check("required_any を元の設定から引き継ぐ",
           written["genres"]["あ"]["required_any"] == ["A"], written["genres"]["あ"])
     check("画面表示用にジャンルを返す", set(genres) == {"あ", "い"}, list(genres))
+
+print("--- 失敗した語は「回した語」に数えない ---")
+# 回線が切れて後半が全滅した回でも、次の実行で真っ先に掛け直せるようにする
+raw = {"results": [
+    {"genre": "あ", "keyword": "a1", "posts": [{"id": "1"}], "error": None},
+    {"genre": "あ", "keyword": "a2", "posts": [], "error": "net::ERR_INTERNET_DISCONNECTED"},
+    {"genre": "い", "keyword": "i1", "posts": [], "error": "Timeout"},
+    {"genre": "い", "keyword": "i2", "posts": [], "error": None},
+]}
+bad = failed_pairs(raw)
+check("失敗した語だけ拾う", bad == {("あ", "a2"), ("い", "i1")}, sorted(bad))
+check("0件でもエラーが無ければ成功扱い", ("い", "i2") not in bad, sorted(bad))
+check("結果が空でも落ちない", failed_pairs({}) == set(), None)
+done = [p for p in SAMPLE_PAIRS if p not in bad]
+check("成功した語だけが記録に回る",
+      ("あ", "a2") not in done and ("い", "i1") not in done, done)
+check("失敗しなかった語は記録に残る", ("あ", "a1") in done, done)
 
 print("--- 1回で回す語数の自動決定 ---")
 # 固定値にすると、ジャンルを減らしたとき1回で全部回ってしまい（負荷が偏る）、

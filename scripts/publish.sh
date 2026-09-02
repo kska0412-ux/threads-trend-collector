@@ -63,8 +63,25 @@ if ! run git commit -m "収集結果を更新 $(date '+%Y-%m-%d %H:%M')"; then
   exit 1
 fi
 
-if ! run git push origin HEAD; then
-  log "pushに失敗しました。認証が切れている可能性があります: gh auth login"
+# push の失敗は「認証切れ」と「通信できない」で対処が全く違う。
+# 一律に gh auth login を促すと、回線が落ちていただけのときに遠回りさせる。
+PUSH_OUT="$(git push origin HEAD 2>&1)"
+PUSH_STATUS=$?
+[ -n "$PUSH_OUT" ] && log "$PUSH_OUT"
+if [ "$PUSH_STATUS" -ne 0 ]; then
+  case "$PUSH_OUT" in
+    *"Could not resolve host"*|*"unable to access"*|*"Connection refused"*|\
+    *"Operation timed out"*|*"Network is unreachable"*|*"Could not connect"*)
+      log "pushに失敗しました。ネットワークにつながっていません。"
+      log "  コミットは手元に残っているので、回線が戻れば次回の実行でまとめて送られます。"
+      ;;
+    *"Authentication failed"*|*"Permission denied"*|*"403"*|*"could not read Username"*)
+      log "pushに失敗しました。認証が切れています: gh auth login"
+      ;;
+    *)
+      log "pushに失敗しました。上のメッセージを確認してください。"
+      ;;
+  esac
   exit 1
 fi
 

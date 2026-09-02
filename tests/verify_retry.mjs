@@ -80,6 +80,21 @@ console.log("--- 未ログインは即座に打ち切る ---");
   check("isFatalは通常のエラーでは立たない", !isFatal("page.goto: Timeout"), null);
 }
 
+// ネットワークが切れているときに1語ずつ90秒のタイムアウトを踏むと、
+// 19語で最悪1時間を捨てる。掛け直しは run_collect.sh に任せて即座に止める
+{
+  console.log("--- 回線が切れたら即座に打ち切る ---");
+  check("回線切断は致命的",
+        isFatal("page.goto: net::ERR_INTERNET_DISCONNECTED at https://www.threads.com/search?q=x"), null);
+  check("名前解決の失敗も致命的", isFatal("net::ERR_NAME_NOT_RESOLVED"), null);
+  check("回線切り替えも致命的", isFatal("net::ERR_NETWORK_CHANGED"), null);
+  // タイムアウトは一時的なことが多い。ここで止めると取れるはずの語まで捨てる
+  check("タイムアウトは致命的ではない", !isFatal("page.goto: Timeout 90000ms exceeded."), null);
+  check("件数不足も致命的ではない", !isFatal("0 件しか取れず"), null);
+  check("文字列以外でも落ちない",
+        !isFatal(null) && !isFatal(undefined) && !isFatal(123), null);
+}
+
 console.log("--- 0件が続く場合 ---");
 {
   let calls = 0;

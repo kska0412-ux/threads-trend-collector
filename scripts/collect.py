@@ -288,6 +288,18 @@ def warn_stale_genres(store, config_genres):
     print(f"    python3 scripts/rename_genre.py '{next(iter(stale))}' '<新しい名前>'")
 
 
+def failed_pairs(raw):
+    """
+    スクレイパの結果から、失敗した (ジャンル, キーワード) を拾う。
+
+    失敗した語を「回した語」に数えると、次の実行で先回りの対象から外れて
+    しまう。ネットワークが切れて後半が全滅した回でも、次に真っ先に
+    掛け直せるようにするため、成功した語だけを記録する。
+    """
+    return {(e.get("genre"), e.get("keyword"))
+            for e in raw.get("results", []) if e.get("error")}
+
+
 def plan_batch(pairs, state, batch, seen):
     """
     今回処理する組を決める。返り値は (処理する組, ローテーションで進んだ窓, 開始位置)。
@@ -536,14 +548,18 @@ def main():
                 print("     ローテーションも進めていないので、次回は同じ範囲をやり直します。")
             return 1
 
+        raw_path = RAW_FILE
+        failed = failed_pairs(json.loads(raw_path.read_text(encoding="utf-8")))
+        if failed:
+            print(f"\n失敗した {len(failed)} 語は「回した語」に数えません"
+                  f"（次の実行で先に掛け直します）。")
+
         # 一部のキーワードが失敗しても位置は進める。詰まったジャンルで
         # 止まり続けると、その先のジャンルが永久に収集されなくなるため。
         if not args.dry_run and not args.limit:
             if advance:
                 save_rotation(*window[-1])
-            save_seen(seen, pairs, batch_pairs)
-
-        raw_path = RAW_FILE
+            save_seen(seen, pairs, [p for p in batch_pairs if p not in failed])
 
     # --- マージ ---
     raw = json.loads(raw_path.read_text(encoding="utf-8"))
