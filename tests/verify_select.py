@@ -78,20 +78,20 @@ def grow(rid, likes, velocity, genres):
 
 # いいねの桁が違う2ジャンル。枠取りが無いと大きいほうが上限を食い切る
 big = [grow(f"big{i}", 10000 + i, 100.0, ["ダイエット"]) for i in range(50)]
-niche = [grow(f"nic{i}", 10 + i, 0.1, ["神経エステ"]) for i in range(50)]
+niche = [grow(f"nic{i}", 10 + i, 0.1, ["エステ・リラクゼーション"]) for i in range(50)]
 
 kept, aged, over = select_rows(big + niche, 180, 20, per_genre=0)
 seen = {g for r in kept for g in r["genres"]}
 check("枠取りなしだとニッチなジャンルが丸ごと消える（採用しなかった方式）",
-      "神経エステ" not in seen, sorted(seen))
+      "エステ・リラクゼーション" not in seen, sorted(seen))
 
 kept, aged, over = select_rows(big + niche, 180, 20, per_genre=8)
 counts = {}
 for r in kept:
     for g in r["genres"]:
         counts[g] = counts.get(g, 0) + 1
-check("枠取りありなら両ジャンルが残る", set(counts) == {"ダイエット", "神経エステ"}, counts)
-check("ニッチなジャンルが枠の数だけ残る", counts.get("神経エステ", 0) >= 8, counts)
+check("枠取りありなら両ジャンルが残る", set(counts) == {"ダイエット", "エステ・リラクゼーション"}, counts)
+check("ニッチなジャンルが枠の数だけ残る", counts.get("エステ・リラクゼーション", 0) >= 8, counts)
 check("いいねの大きいジャンルは残りの枠も取る", counts.get("ダイエット", 0) > 8, counts)
 check("上限は守られる", len(kept) == 20, len(kept))
 check("同じ投稿が重複しない", len({r["id"] for r in kept}) == len(kept), len(kept))

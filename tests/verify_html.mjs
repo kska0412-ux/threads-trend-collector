@@ -194,15 +194,23 @@ check('1行の名前でも2行ぶんの高さを取る',
 check('折り返した名前が上下中央に来る',
       /\.bar-name\s*\{[^}]*align-content:\s*center/s.test(css9), null);
 // 長い名前は「・」の位置だけで2行に折る。カタカナ語の途中では割らない
-const longBar = bars.find(b => barName(b) === '神経エステ・リラクゼーション');
-check('長いジャンル名の行がある', longBar !== undefined, bars.map(barName));
+// ジャンル名を直に書くと、名前を変えるたびにテストが壊れる。
+// 「一番長い名前」を選んで、それが「・」で折れることを見る
+const longBar = bars.slice().sort((a, b) => barName(b).length - barName(a).length)[0];
+const longName = barName(longBar);
+check('一番長い名前に「・」がある', longName.includes('・'), longName);
 const longUnits = [...longBar.querySelectorAll('.nb')].map(e => e.textContent);
-check('2つに分かれている', longUnits.length === 2, longUnits);
-check('「・」の位置で分かれる',
-      longUnits[0] === '神経エステ・' && longUnits[1] === 'リラクゼーション', longUnits);
+check('「・」の数だけ分かれている',
+      longUnits.length === longName.split('・').length, longUnits);
 check('「・」が行頭に来ない', longUnits.every(u => !u.startsWith('・')), longUnits);
-check('全文が .nb の中に収まっている', longUnits.join('') === barName(longBar),
-      { units: longUnits.join(''), all: barName(longBar) });
+check('「・」は前の語にくっつく',
+      longUnits.slice(0, -1).every(u => u.endsWith('・')), longUnits);
+check('全文が .nb の中に収まっている', longUnits.join('') === longName,
+      { units: longUnits.join(''), all: longName });
+// 8.5em の列に1行で収まらない区切りがあると、そこで単語が割れる
+const tooLong = bars.flatMap(b => [...b.querySelectorAll('.bar-name .nb')].map(e => e.textContent))
+                    .filter(u => u.length > 8);
+check('どの区切りも8文字以内（列幅に収まる）', tooLong.length === 0, tooLong);
 const shortBar = bars.find(b => barName(b) === '薄毛');
 check('「・」の無い名前は1かたまり',
       shortBar.querySelectorAll('.nb').length === 1, shortBar.innerHTML);
