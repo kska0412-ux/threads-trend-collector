@@ -19,7 +19,10 @@ from collect import (  # noqa: E402
     DEFAULT_BATCH,
     build_pairs,
     genres_with_data,
+    plan_batch,
+    seen_from_store,
     select_batch,
+    stale_genres,
     write_batch_config,
 )
 from common import CONFIG_FILE  # noqa: E402
@@ -101,8 +104,75 @@ missing_pairs = [p for p in pairs if p[0] not in have]
 check("未収集ジャンルの語だけ残る", {g for g, _ in missing_pairs} == {"う"}, missing_pairs)
 check("収集済みの語は入らない", all(g == "う" for g, _ in missing_pairs), missing_pairs)
 
+print("--- 設定に足したばかりの語を先に回す ---")
+# 記録が無い＝初回。ここで空集合を返すと50語全部が「新しい語」になり、
+# 1回で全部回そうとして数時間かかってしまう
+batch, window, start = plan_batch(pairs, {}, 3, None)
+check("初回は先回りしない（ローテーションどおり）", batch == pairs[:3], batch)
+check("初回でも位置は進む", window == pairs[:3], window)
+
+# 「い」のジャンルを丸ごと足した直後を想定する
+seen_all = set(pairs)
+seen_old = seen_all - {("い", "i1"), ("い", "i2")}
+batch, window, start = plan_batch(pairs, state_of(("あ", "a1")), 3, seen_old)
+check("新しい語が先頭に来る", batch[:2] == [("い", "i1"), ("い", "i2")], batch)
+check("1回の語数は変わらない", len(batch) == 3, batch)
+check("ローテーション側は削られた分だけ", window == [("あ", "a2")], window)
+check("位置はローテーション側で進む", start == 1, start)
+
+# 新しい語が枠を超えるとき
+seen_few = {("あ", "a1")}
+batch, window, start = plan_batch(pairs, {}, 2, seen_few)
+check("枠を超える新しい語は次回に回す", len(batch) == 2, batch)
+check("その回は位置を進めない", window == [], window)
+check("進めないことが分かる形で返る", start is None, start)
+
+# 新しい語がローテーションの窓と重なったとき、同じ語を2回引かない
+seen_dup = seen_all - {("あ", "a2")}
+batch, window, start = plan_batch(pairs, state_of(("あ", "a1")), 3, seen_dup)
+check("重複して回さない", len(batch) == len(set(batch)), batch)
+check("重なった語も済んだ扱いで位置が進む",
+      ("あ", "a2") in window, window)
+
+check("変化が無ければローテーションのまま",
+      plan_batch(pairs, {}, 3, seen_all)[0] == pairs[:3], None)
+check("キーワードが無ければ空", plan_batch([], {}, 3, set())[0] == [], None)
+
+print("--- 記録ファイルが無いときの割り出し ---")
+# 記録を作る前に足し引きした語を、先回りの対象から漏らさないための道
+store3 = {"posts": {
+    "p1": {"keywords": ["a1", "a2"]},
+    "p2": {"keywords": ["i1"]},
+    "p3": {},
+}}
+derived = seen_from_store(store3, pairs)
+check("蓄積に出てくる語は済み扱い",
+      derived == {("あ", "a1"), ("あ", "a2"), ("い", "i1")}, sorted(derived))
+check("一度も取れていない語は新しい語のまま",
+      ("う", "u1") not in derived, sorted(derived))
+check("蓄積が空なら全部が新しい語", seen_from_store({}, pairs) == set(), None)
+# 割り出した結果をそのまま先回りに渡せること
+batch, window, start = plan_batch(pairs, {}, 3, derived)
+check("割り出した結果で先回りが効く",
+      batch[0] in [("あ", "a3"), ("い", "i2"), ("う", "u1"), ("う", "u2")], batch)
+
+print("--- 設定に無いジャンルが蓄積に残っているとき ---")
+store2 = {"posts": {
+    "a": {"genres": ["あ"]},
+    "b": {"genres": ["旧ジャンル"]},
+    "c": {"genres": ["旧ジャンル", "い"]},
+}}
+stale = stale_genres(store2, ["あ", "い", "う"])
+check("設定に無い名前だけ拾う", set(stale) == {"旧ジャンル"}, stale)
+check("件数を数える", stale["旧ジャンル"] == 2, stale)
+check("ズレが無ければ空", stale_genres(store2, ["あ", "い", "旧ジャンル"]) == {}, None)
+# 設定が読めないときに全ジャンルを「知らない名前」と言い出すと警告が壊れる
+check("設定が空なら何も言わない", stale_genres(store2, []) == {}, None)
+
 print("--- 全部まわす指定 ---")
 check("batch=0 なら全部", select_batch(pairs, {}, 0)[0] == pairs, None)
+check("batch=0 は先回りの有無によらず全部",
+      plan_batch(pairs, {}, 0, set())[0] == pairs, None)
 check("batch が語数以上なら全部", select_batch(pairs, {}, 99)[0] == pairs, None)
 check("キーワードが無ければ空", select_batch([], {}, 3)[0] == [], None)
 

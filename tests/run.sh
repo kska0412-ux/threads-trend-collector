@@ -10,6 +10,7 @@
 #   3. collect.py    取得済みデータのマージ（重複排除・いいね更新）
 #   3b. collect.py   ジャンルのローテーション（1日3回で全ジャンルを一周するか）
 #   4. publish.sh    GitHub Pages への公開判定（ローカルのベアリポジトリで検証）
+#   5. run_collect.sh 自動実行の排他ロックと、失敗時の掛け直し
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -59,6 +60,10 @@ bash "$ROOT/tests/verify_publish.sh"
 echo
 echo "===== 9. 公開の安全性 ====="
 bash "$ROOT/tests/verify_safety.sh"
+
+echo
+echo "===== 10. 自動実行の排他と再試行 ====="
+bash "$ROOT/tests/verify_lock.sh"
 
 echo
 echo "全テスト通過"

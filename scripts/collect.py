@@ -46,6 +46,8 @@ RAW_FILE = BASE_DIR / "data" / "raw_latest.json"
 # どちらも data/ 配下なので .gitignore に入っていて、公開リポジトリには出ない。
 ROTATION_FILE = BASE_DIR / "data" / "rotation.json"
 BATCH_FILE = BASE_DIR / "data" / "_batch_keywords.json"
+# 一度でも収集にかけたキーワードの記録。設定に足したばかりの語を見分けるために使う。
+SEEN_FILE = BASE_DIR / "data" / "keywords_seen.json"
 
 # 1回の実行で処理するキーワード数。
 # 全ジャンルを毎回回すと、1語あたり最悪3分（リトライ＋90秒タイムアウト）なので
@@ -140,6 +142,55 @@ def genres_with_data(store):
     return seen
 
 
+def load_seen():
+    """
+    これまでに収集へ回したキーワードの集合。記録が無ければ None を返す。
+
+    None（初回）と空集合（全部が新規）は意味が違う。初回に空集合を返すと
+    50語すべてが「新しい語」に見えて、1回で全部回そうとしてしまう。
+    """
+    if not SEEN_FILE.exists():
+        return None
+    try:
+        data = json.loads(SEEN_FILE.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return None
+    if not isinstance(data, list):
+        return None
+    return {tuple(x) for x in data if isinstance(x, list) and len(x) == 2}
+
+
+def seen_from_store(store, pairs):
+    """
+    記録ファイルがまだ無いとき、蓄積データから「一度は回した語」を割り出す。
+
+    投稿に付いているキーワードは、その語で実際に検索して拾えた証拠になる。
+    これをやらないと、記録を作る前に足し引きした語が先回りから漏れる。
+    一度も投稿を取れていない語は「まだ回していない」扱いになるが、
+    その回のバッチに入った時点で記録に載るので、一周すれば落ち着く。
+    """
+    collected = set()
+    for post in store.get("posts", {}).values():
+        collected.update(post.get("keywords") or [])
+    return {p for p in pairs if p[1] in collected}
+
+
+def save_seen(seen, pairs, batch_pairs):
+    """
+    記録を更新する。今回回した分を足し、設定から消えた語は落とす。
+
+    落としておくと、いったん消して書き戻した語をまた「新しい語」として
+    拾える。残したままだと、書き戻しても先回りが効かない。
+    """
+    base = set(pairs) if seen is None else seen
+    updated = sorted((base | set(batch_pairs)) & set(pairs))
+    SEEN_FILE.parent.mkdir(parents=True, exist_ok=True)
+    tmp = SEEN_FILE.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps([list(p) for p in updated], ensure_ascii=False, indent=2),
+                   encoding="utf-8")
+    tmp.replace(SEEN_FILE)
+
+
 def load_rotation():
     """前回どこまで進んだかを読む。無い・壊れているなら空を返して先頭から始める。"""
     if not ROTATION_FILE.exists():
@@ -189,6 +240,69 @@ def select_batch(pairs, state, batch):
     return doubled[start:start + batch], start
 
 
+def stale_genres(store, config_genres):
+    """
+    蓄積に残っているのに、設定にはもう無いジャンル名を数える。
+    {ジャンル名: 件数} を件数の多い順で返す。
+
+    設定のジャンル名だけ変えて蓄積を放置すると、ページに新旧のチップが
+    両方並び、どちらを押しても半分しか出てこない状態になる。
+    付け替えは名前の対応を機械では決められないので、警告だけ出す。
+    """
+    if not config_genres:
+        return {}
+    counts = {}
+    known = set(config_genres)
+    for post in store.get("posts", {}).values():
+        for genre in post.get("genres") or []:
+            if genre not in known:
+                counts[genre] = counts.get(genre, 0) + 1
+    return dict(sorted(counts.items(), key=lambda kv: -kv[1]))
+
+
+def warn_stale_genres(store, config_genres):
+    """ズレを見つけたら、直し方まで含めて画面とログに出す。黙って放置しない。"""
+    stale = stale_genres(store, config_genres)
+    if not stale:
+        return
+    print("\n[注意] 設定に無いジャンル名が蓄積に残っています。")
+    print("       ページに新旧のチップが両方並びます。")
+    for genre, count in stale.items():
+        print(f"  - {genre}: {count} 件")
+    print("  ジャンル名を変えたなら、蓄積側も付け替えてください:")
+    print(f"    python3 scripts/rename_genre.py '{next(iter(stale))}' '<新しい名前>'")
+
+
+def plan_batch(pairs, state, batch, seen):
+    """
+    今回処理する組を決める。返り値は (処理する組, ローテーションで進んだ窓, 開始位置)。
+
+    設定に足したばかりの語は、ローテーションが一周するのを待たずに先頭へ入れる。
+    キーワードを直したら次の自動実行で反映されるようにするため（待つと最大1日）。
+    そのぶんローテーション側の枠を削るので、1回の語数は変わらない。
+
+    ローテーションの位置は「窓」の最後で進める。新しい語が窓と重なって
+    実際には回さなかった語も、窓に入っていれば済んだものとして扱う。
+    """
+    if not pairs:
+        return [], [], 0
+    if batch <= 0 or batch >= len(pairs):
+        return list(pairs), list(pairs), 0
+
+    fresh = [] if seen is None else [p for p in pairs if p not in seen]
+    fresh = fresh[:batch]
+
+    room = batch - len(fresh)
+    if room <= 0:
+        # 新しい語だけで枠が埋まった。残りは次回に回るので位置は進めない
+        return fresh, [], None
+
+    window, start = select_batch(pairs, state, room)
+    fresh_set = set(fresh)
+    rest = [p for p in window if p not in fresh_set]
+    return fresh + rest, window, start
+
+
 def write_batch_config(config, batch_pairs, path):
     """
     今回処理する分だけを抜き出した設定ファイルを書く。scrape.mjs はこれを読む。
@@ -209,6 +323,15 @@ def write_batch_config(config, batch_pairs, path):
         json.dumps({"genres": genres}, ensure_ascii=False, indent=2), encoding="utf-8"
     )
     return genres
+
+
+def load_config_genre_names():
+    """設定にあるジャンル名。読めなければ空を返し、ズレの警告はしない。"""
+    try:
+        config = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    return list(config.get("genres", {}))
 
 
 def load_required_any():
@@ -324,6 +447,10 @@ def main():
         pairs = build_pairs(config)
         if not pairs:
             raise SystemExit(f"キーワードが1つもありません: {CONFIG_FILE}")
+        seen = load_seen()
+        if seen is None:
+            seen = seen_from_store(load_store(), pairs)
+        window = []
 
         # --- 今回どこを回すか決める ---
         if args.genre:
@@ -351,12 +478,22 @@ def main():
             advance = False
             print(f"全 {len(pairs)} 語を1回で処理します（--all）。数時間かかります。")
         else:
-            batch_pairs, start = select_batch(pairs, load_rotation(), args.batch)
-            advance = True
-            print(f"ローテーション: 全 {len(pairs)} 語のうち "
-                  f"{start + 1} 番目から {len(batch_pairs)} 語を処理します")
+            batch_pairs, window, start = plan_batch(
+                pairs, load_rotation(), args.batch, seen
+            )
+            advance = bool(window)
+            fresh_count = 0 if seen is None else len([p for p in batch_pairs if p not in seen])
+            if start is None:
+                print(f"設定に足したばかりの {len(batch_pairs)} 語を先に処理します"
+                      f"（ローテーションは進めません）")
+            else:
+                print(f"ローテーション: 全 {len(pairs)} 語のうち "
+                      f"{start + 1} 番目から {len(window)} 語を処理します")
+                if fresh_count:
+                    print(f"うち {fresh_count} 語は設定に足したばかりの語なので先に回します")
 
-        # 試運転で先頭だけ切ると、最後まで進んでいないのに位置だけ進んでしまう
+        # 試運転で先頭だけ切ると、最後まで進んでいないのに位置だけ進んでしまう。
+        # 「回した語」の記録も同じ理由で残さない
         if args.limit:
             advance = False
 
@@ -385,8 +522,10 @@ def main():
 
         # 一部のキーワードが失敗しても位置は進める。詰まったジャンルで
         # 止まり続けると、その先のジャンルが永久に収集されなくなるため。
-        if advance and not args.dry_run:
-            save_rotation(*batch_pairs[-1])
+        if not args.dry_run and not args.limit:
+            if advance:
+                save_rotation(*window[-1])
+            save_seen(seen, pairs, batch_pairs)
 
         raw_path = RAW_FILE
 
@@ -441,6 +580,8 @@ def main():
         print(f"\n失敗したキーワード: {len(failures)}")
         for kw, msg in failures:
             print(f"  - {kw}: {msg}")
+
+    warn_stale_genres(store, load_config_genre_names())
 
     if args.dry_run:
         print("\n--dry-run のため保存しませんでした。")

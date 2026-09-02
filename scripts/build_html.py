@@ -877,6 +877,13 @@ def main():
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(html, encoding="utf-8")
 
+    # 設定に無いジャンルが混ざっていたら、生成した時点で気づけるようにする
+    if config_genres:
+        stale = sorted({g for r in rows for g in r["genres"]} - set(config_genres))
+        if stale:
+            print("[注意] 設定に無いジャンル名がページに載っています: " + " / ".join(stale))
+            print("       python3 scripts/rename_genre.py '<古い名前>' '<新しい名前>'")
+
     size_kb = args.output.stat().st_size / 1024
     print(f"生成しました: {args.output}  （{len(rows)} 件 / {size_kb:.0f} KB）")
     # 黙って捨てない。何をどれだけ載せなかったかを必ず出す。

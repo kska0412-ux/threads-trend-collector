@@ -29,7 +29,7 @@ if [ ! -f docs/index.html ]; then
 fi
 
 OWNER="$(gh api user --jq .login)"
-echo "  OK: gh 認証済み（$OWNER）"
+echo "  OK: gh 認証済み（${OWNER}）"
 
 echo "== 2. git リポジトリを用意 =="
 if [ -d .git ]; then
