@@ -158,12 +158,14 @@ check('解除後は掛け合わせchipが全部消灯',
       mods.slice(1).every(c => !c.classList.contains('on')),
       mods.slice(1).map(c => c.className));
 
-console.log('--- 5. キーワード絞り込み ---');
-const kwEl = doc.getElementById('keyword');
-check('キーワードoption数(ユニーク14+すべて=15)', kwEl.options.length === 15, kwEl.options.length);
-kwEl.value = 'AGA'; fire(kwEl, 'change');
-check('AGAで2件', n() === 2, { count: n(), users: users() });
-kwEl.value = ''; fire(kwEl, 'change');
+console.log('--- 5. 絞り込みの操作は3つだけ ---');
+// キーワードのドロップダウンは廃止した。ジャンルと掛け合わせのチップで足りる。
+// 残すと「オンライン秘書 経営」のような組み合わせ語が並んで長くなる
+check('キーワードのドロップダウンが無い', doc.getElementById('keyword') === null, null);
+const selects = [...doc.querySelectorAll('.controls select')].map(e => e.id);
+check('残る選択肢は並び替えと期間だけ',
+      selects.join(',') === 'sort,period', selects);
+check('本文検索は残っている', doc.getElementById('q') !== null, null);
 
 console.log('--- 6. テキスト検索 ---');
 const q = doc.getElementById('q');
@@ -266,15 +268,24 @@ check('どの区切りも列幅に収まる（単語が割れない）', tooLong
       { colEm, tooLong: tooLong.map(u => [u, u.length]) });
 
 console.log('--- 9c. カードのタグ ---');
-// 1ジャンル1語の構成だと、ジャンル名と検索語が同じで二重に出る
-const dupTags = [...doc.querySelectorAll('.card')].map(c => {
-  const t = [...c.querySelectorAll('.tag')].map(e => e.textContent);
-  return [t, new Set(t).size === t.length];
-}).filter(([, ok]) => !ok);
-check('同じタグが二重に出ない', dupTags.length === 0, dupTags.map(([t]) => t));
-check('タグ自体は出ている',
-      [...doc.querySelectorAll('.card .tag')].length > 0,
-      [...doc.querySelectorAll('.card .tag')].length);
+const cardTags = [...doc.querySelectorAll('.card')].map(c =>
+  [...c.querySelectorAll('.tag')].map(e => e.textContent));
+check('同じタグが二重に出ない',
+      cardTags.every(t => new Set(t).size === t.length),
+      cardTags.filter(t => new Set(t).size !== t.length));
+check('タグ自体は出ている', cardTags.flat().length > 0, cardTags.flat().length);
+// 検索語をそのまま出すと「オンライン秘書」と「オンライン秘書 経営」が並んで冗長
+check('検索語そのものは出さない',
+      cardTags.flat().every(t => !t.includes(' ')), cardTags.flat().filter(t => t.includes(' ')));
+// タグは上下2段のチップと同じ語彙にそろえる
+const vocab = new Set(chips.slice(1).map(chipName).concat(mods.slice(1).map(modName)));
+const outside = cardTags.flat().filter(t => !vocab.has(t));
+check('タグはジャンルか掛け合わせのどれか', outside.length === 0, outside);
+// 掛け合わせのタグが本当に付くこと（p9 は本文に「売上」「集客」を持つ）
+const keieiCard = [...doc.querySelectorAll('.card')].find(c => c.textContent.includes('salon_keiei'));
+check('掛け合わせのタグが付く',
+      [...keieiCard.querySelectorAll('.tag')].map(e => e.textContent).includes('経営'),
+      [...keieiCard.querySelectorAll('.tag')].map(e => e.textContent));
 
 console.log('--- 10. 伸び中の表示 ---');
 const badges = [...doc.querySelectorAll('.badge')];

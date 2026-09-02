@@ -308,7 +308,6 @@ def render_html(rows, generated_at, store, archived, config_genres=(),
     summary = build_summary(rows, store, archived, config_genres)
     # チップの並びは下の「ジャンル別」の棒グラフと揃える
     genres = [[name, count] for name, count in summary["genres"]]
-    keywords = sorted({k for r in rows for k in r["keywords"]})
     bar_col, bar_minh = bar_name_layout([g for g, _ in genres])
 
     # 掛け合わせ語は設定に書いた順で出す。件数順にすると日ごとに並びが動き、
@@ -323,7 +322,6 @@ def render_html(rows, generated_at, store, archived, config_genres=(),
         TEMPLATE.replace("__DATA__", embed_json(rows))
         .replace("__GENRES__", embed_json(genres))
         .replace("__MODIFIERS__", embed_json(modifiers))
-        .replace("__KEYWORDS__", embed_json(keywords))
         .replace("__SUMMARY__", embed_json(summary))
         .replace("__RISING__", rising_js(rows))
         .replace("__GENERATED__", generated_at)
@@ -664,7 +662,6 @@ TEMPLATE = r"""
         <option value="7">期間: 7日以内</option>
         <option value="30">期間: 30日以内</option>
       </select>
-      <select id="keyword"><option value="">キーワード: すべて</option></select>
     </div>
     <div class="row">
       <input type="search" id="q" placeholder="本文・ユーザー名で絞り込み">
@@ -680,7 +677,6 @@ TEMPLATE = r"""
 <script id="data" type="application/json">__DATA__</script>
 <script id="genre-list" type="application/json">__GENRES__</script>
 <script id="modifier-list" type="application/json">__MODIFIERS__</script>
-<script id="keyword-list" type="application/json">__KEYWORDS__</script>
 <script id="summary-data" type="application/json">__SUMMARY__</script>
 <script>
 (function () {
@@ -688,7 +684,6 @@ TEMPLATE = r"""
   var POSTS = readJSON('data');
   var GENRES = readJSON('genre-list');
   var MODIFIERS = readJSON('modifier-list');
-  var KEYWORDS = readJSON('keyword-list');
   var SUMMARY = readJSON('summary-data');
   var RISING = __RISING__;   // 伸び率の上位10%にあたる値
 
@@ -697,7 +692,6 @@ TEMPLATE = r"""
   var els = {
     sort: document.getElementById('sort'),
     period: document.getElementById('period'),
-    keyword: document.getElementById('keyword'),
     q: document.getElementById('q'),
     genres: document.getElementById('genres'),
     modifiers: document.getElementById('modifiers'),
@@ -790,12 +784,6 @@ TEMPLATE = r"""
     phrases(stamp, units);
   })();
 
-  KEYWORDS.forEach(function (k) {
-    var o = document.createElement('option');
-    o.value = k; o.textContent = 'キーワード: ' + k;
-    els.keyword.appendChild(o);
-  });
-
   // --- 絞り込みのチップ（2段構え） ---
   // 上段: 主ジャンル。単独で検索して意味のある語。
   // 下段: 掛け合わせ語。「経営」「メニュー」のように単独だと飲食や一般ビジネスを
@@ -878,14 +866,12 @@ TEMPLATE = r"""
 
   function filtered() {
     var days = parseInt(els.period.value, 10);
-    var kw = els.keyword.value;
     var q = els.q.value.trim().toLowerCase();
 
     return POSTS.filter(function (p) {
       if (days > 0) {
         if (p.ageHours === null || p.ageHours > days * 24) return false;
       }
-      if (kw && p.keywords.indexOf(kw) === -1) return false;
       if (activeGenres.size > 0) {
         var hit = p.genres.some(function (g) { return activeGenres.has(g); });
         if (!hit) return false;
@@ -951,10 +937,11 @@ TEMPLATE = r"""
       card.appendChild(mk('p', 'text', p.text));
 
       var tags = mk('div', 'tags');
-      // ジャンル名と検索語が同じことがある（1ジャンル1語の構成）。
-      // そのまま並べると「ピラティス ピラティス」と二重に出る
+      // 上下2段のチップと同じ「ジャンル＋掛け合わせ」を出す。
+      // 検索語そのものを出すと、「オンライン秘書」と「オンライン秘書 経営」が
+      // 並んで冗長になり、1ジャンル1語のときは同じ語が二重に出る
       var seenTags = {};
-      p.genres.concat(p.keywords).forEach(function (t) {
+      p.genres.concat(p.mods || []).forEach(function (t) {
         if (seenTags[t]) return;
         seenTags[t] = true;
         tags.appendChild(mk('span', 'tag', t));
@@ -972,7 +959,7 @@ TEMPLATE = r"""
     els.list.appendChild(frag);
   }
 
-  [els.sort, els.period, els.keyword].forEach(function (el) {
+  [els.sort, els.period].forEach(function (el) {
     el.addEventListener('change', render);
   });
   els.q.addEventListener('input', render);
