@@ -33,7 +33,8 @@ check('伸び率の基準がJSの値になっている（infではない）',
       String(win.document.documentElement.innerHTML.match(/var RISING = ([^;]+);/)[1]));
 
 console.log('--- 0件でも骨組みは出ること ---');
-const chips = [...doc.querySelectorAll('.chip')];
+const chips = [...doc.querySelectorAll('#genres .chip')];
+const modChips = [...doc.querySelectorAll('#modifiers .chip')];
 const declared = Number((doc.querySelector('.ver').textContent.match(/(\d+)ジャンル/) || [])[1]);
 check('見出しがジャンル数を名乗る', declared > 0, doc.querySelector('.ver').textContent);
 // 0件でもジャンルを出さないと、対象が無いツールに見えてしまう
@@ -41,6 +42,11 @@ check('「すべて」＋設定のジャンルが並ぶ', chips.length === decla
       { chips: chips.length, declared });
 check('全ジャンルが「収集待ち」', chips.slice(1).every(c => c.classList.contains('pending')),
       chips.slice(1).filter(c => !c.classList.contains('pending')).length);
+// 掛け合わせは本文で判定するので、0件のときは全部が押せない状態になる
+check('掛け合わせも「すべて」＋全語が並ぶ', modChips.length > 1, modChips.length);
+check('掛け合わせも全部「収集待ち」',
+      modChips.slice(1).every(c => c.classList.contains('pending')),
+      modChips.slice(1).filter(c => !c.classList.contains('pending')).length);
 const bars = [...doc.querySelectorAll('.bar-row')];
 check('棒もジャンルの数だけ並ぶ', bars.length === declared, bars.length);
 check('棒の長さは全部0',

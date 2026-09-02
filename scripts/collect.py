@@ -137,8 +137,13 @@ def merge_posts(store, api_posts, genre, keyword, collected_at):
 
 def build_pairs(config):
     """
-    設定を [(ジャンル, キーワード), ...] に開く。
-    設定ファイルに書いた順序が、そのまま収集の順序になる。
+    設定を [(ジャンル, キーワード), ...] に開く。並び順がそのまま収集の順序になる。
+
+    主ジャンルを先に、掛け合わせを後に置く。ローテーションが一周する前でも
+    主ジャンルの棒が先に立ち上がり、ページが空に見える時間が短くなるため。
+
+    掛け合わせ語（経営・メニューなど）は単独では検索しない。単独で引くと
+    飲食や一般ビジネスの投稿を大量に拾うため、必ず主ジャンルと組ませる。
     """
     pairs = []
     for genre, entry in config.get("genres", {}).items():
@@ -146,7 +151,25 @@ def build_pairs(config):
         keywords = entry if isinstance(entry, list) else entry.get("keywords", [])
         for keyword in keywords:
             pairs.append((genre, keyword))
+
+    known = set(config.get("genres", {}))
+    for modifier, entry in (config.get("modifiers") or {}).items():
+        for genre in entry.get("combine_with", []):
+            # 設定に無いジャンル名を書いても、黙って組み合わせを作らない
+            if genre not in known:
+                continue
+            pair = (genre, f"{genre} {modifier}")
+            if pair not in pairs:
+                pairs.append(pair)
     return pairs
+
+
+def build_modifiers(config):
+    """掛け合わせ語と、ページ側の絞り込みに使う語を返す。{語: [判定語, ...]}。"""
+    table = {}
+    for modifier, entry in (config.get("modifiers") or {}).items():
+        table[modifier] = list(entry.get("match_any") or [])
+    return table
 
 
 def genres_with_data(store):

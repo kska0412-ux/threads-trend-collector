@@ -20,6 +20,7 @@ from collect import (  # noqa: E402
     RUNS_PER_DAY,
     auto_batch,
     build_pairs,
+    build_modifiers,
     failed_pairs,
     genres_with_data,
     plan_batch,
@@ -227,11 +228,53 @@ check("上限内なら1日で一周しきる", short == [], short)
 check("上限を超えても語数を超える指定はしない",
       all(auto_batch(n) <= max(1, n) for n in range(1, 200)), None)
 
+print("--- 掛け合わせ語の展開 ---")
+# 「経営」を単独で検索すると飲食や一般ビジネスを拾う（実測で74%がフィルタ落ち）。
+# 単独では検索せず、必ず主ジャンルと組ませる
+COMBO = {
+    "genres": {
+        "あ": {"keywords": ["あ"], "required_any": ["A"]},
+        "い": {"keywords": ["い"], "required_any": ["I"]},
+    },
+    "modifiers": {
+        "経営": {"combine_with": ["あ", "い"], "match_any": ["経営", "売上"]},
+        "手技": {"combine_with": ["い"], "match_any": ["手技"]},
+        "誤り": {"combine_with": ["存在しない"], "match_any": ["x"]},
+    },
+}
+combo_pairs = build_pairs(COMBO)
+check("主ジャンルが先に来る", combo_pairs[:2] == [("あ", "あ"), ("い", "い")], combo_pairs[:2])
+check("組み合わせ語ができる",
+      ("あ", "あ 経営") in combo_pairs and ("い", "い 手技") in combo_pairs, combo_pairs)
+# 単独の「経営」を作ってしまうと、元のノイズ問題に戻る
+check("掛け合わせ語を単独では検索しない",
+      not any(k in ("経営", "手技") for _, k in combo_pairs), combo_pairs)
+check("組み合わせは主ジャンルに属する",
+      all(g in COMBO["genres"] for g, _ in combo_pairs), combo_pairs)
+check("設定に無いジャンルとは組まない",
+      not any("誤り" in k for _, k in combo_pairs), combo_pairs)
+check("重複しない", len(set(combo_pairs)) == len(combo_pairs), combo_pairs)
+check("modifiers が無くても動く",
+      build_pairs({"genres": {"x": {"keywords": ["x"]}}}) == [("x", "x")], None)
+
+mods = build_modifiers(COMBO)
+check("判定語を読める", mods["経営"] == ["経営", "売上"], mods)
+check("modifiers が無ければ空", build_modifiers({"genres": {}}) == {}, None)
+
 print("--- 実際の config/keywords.json ---")
 config = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
 real = build_pairs(config)
 check(f"キーワードが {len(real)} 語ある", len(real) > 0, len(real))
 check("同じ (ジャンル, キーワード) が重複しない", len(set(real)) == len(real), len(real))
+
+# 掛け合わせ語が単独ジャンルに残っていると、元のノイズ問題に戻る
+overlap = sorted(set(config["genres"]) & set(config.get("modifiers") or {}))
+check("掛け合わせ語が単独ジャンルに残っていない", overlap == [], overlap)
+# 判定語が無いと、ページの2段目で絞り込めない
+no_match = [m for m, e in (config.get("modifiers") or {}).items() if not e.get("match_any")]
+check("全掛け合わせ語に判定語がある", no_match == [], no_match)
+no_combine = [m for m, e in (config.get("modifiers") or {}).items() if not e.get("combine_with")]
+check("全掛け合わせ語に相手のジャンルがある", no_combine == [], no_combine)
 
 missing = [g for g, e in config["genres"].items() if not e.get("required_any")]
 # Threadsの検索は語が緩く一致する。required_any が空だと関連度フィルタが素通りする

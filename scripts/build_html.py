@@ -221,6 +221,36 @@ def bar_name_layout(genres):
     return max(6.5, widest + 0.5), round(lines * 1.4, 2)
 
 
+def load_config_modifiers(path):
+    """
+    掛け合わせ語と、その判定語を設定から読む。{語: [判定語, ...]} を返す。
+    読めなければ空を返し、2段目のチップは出さない。
+    """
+    try:
+        config = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    table = {}
+    for modifier, entry in (config.get("modifiers") or {}).items():
+        words = list(entry.get("match_any") or [])
+        if words:
+            table[modifier] = words
+    return table
+
+
+def tag_modifiers(rows, modifiers):
+    """
+    各投稿に、当てはまる掛け合わせ語を付ける。副作用は rows への書き込みのみ。
+
+    判定は本文を見る。組み合わせ検索で見つかった投稿だけに付けると、
+    単独検索で先に拾っていた同じ話題の投稿が絞り込みから漏れるため。
+    """
+    for row in rows:
+        text = row.get("text") or ""
+        row["mods"] = [m for m, words in modifiers.items()
+                       if any(w in text for w in words)]
+
+
 def rising_js(rows):
     """
     「伸び中」の基準を JavaScript の値として書き出す。
@@ -273,16 +303,26 @@ def build_summary(rows, store, archived, config_genres=()):
     }
 
 
-def render_html(rows, generated_at, store, archived, config_genres=()):
+def render_html(rows, generated_at, store, archived, config_genres=(),
+                config_modifiers=None):
     summary = build_summary(rows, store, archived, config_genres)
     # チップの並びは下の「ジャンル別」の棒グラフと揃える
     genres = [[name, count] for name, count in summary["genres"]]
     keywords = sorted({k for r in rows for k in r["keywords"]})
     bar_col, bar_minh = bar_name_layout([g for g, _ in genres])
 
+    # 掛け合わせ語は設定に書いた順で出す。件数順にすると日ごとに並びが動き、
+    # 「いつもの位置」で押せなくなる（ジャンルより数が少なく、覚えて使うため）
+    mod_counts = {}
+    for row in rows:
+        for m in row.get("mods") or []:
+            mod_counts[m] = mod_counts.get(m, 0) + 1
+    modifiers = [[m, mod_counts.get(m, 0)] for m in (config_modifiers or {})]
+
     return (
         TEMPLATE.replace("__DATA__", embed_json(rows))
         .replace("__GENRES__", embed_json(genres))
+        .replace("__MODIFIERS__", embed_json(modifiers))
         .replace("__KEYWORDS__", embed_json(keywords))
         .replace("__SUMMARY__", embed_json(summary))
         .replace("__RISING__", rising_js(rows))
@@ -517,6 +557,11 @@ TEMPLATE = r"""
     background: var(--accent-soft); border-color: var(--accent);
     color: var(--accent); font-weight: 700;
   }
+  /* どちらの行を押しているのか分かるようにする。2段になると迷いやすい */
+  .filter-label {
+    font-size: .7rem; color: var(--muted); letter-spacing: .04em;
+    white-space: nowrap; min-width: 5.5em;
+  }
   /* ジャンル名は途中で割らない。「ダイエット」を「ダイ」と「エット」に分けない */
   .chip-name { white-space: nowrap; }
   /* まだ1件も無いジャンル。押しても空振りするので、選べないことを見た目で示す */
@@ -624,7 +669,8 @@ TEMPLATE = r"""
     <div class="row">
       <input type="search" id="q" placeholder="本文・ユーザー名で絞り込み">
     </div>
-    <div class="row" id="genres"></div>
+    <div class="row" id="genres"><span class="filter-label">ジャンル</span></div>
+    <div class="row" id="modifiers"><span class="filter-label">掛け合わせ</span></div>
   </div>
 
   <div class="count" id="count"></div>
@@ -633,6 +679,7 @@ TEMPLATE = r"""
 
 <script id="data" type="application/json">__DATA__</script>
 <script id="genre-list" type="application/json">__GENRES__</script>
+<script id="modifier-list" type="application/json">__MODIFIERS__</script>
 <script id="keyword-list" type="application/json">__KEYWORDS__</script>
 <script id="summary-data" type="application/json">__SUMMARY__</script>
 <script>
@@ -640,17 +687,20 @@ TEMPLATE = r"""
   var readJSON = function (id) { return JSON.parse(document.getElementById(id).textContent); };
   var POSTS = readJSON('data');
   var GENRES = readJSON('genre-list');
+  var MODIFIERS = readJSON('modifier-list');
   var KEYWORDS = readJSON('keyword-list');
   var SUMMARY = readJSON('summary-data');
   var RISING = __RISING__;   // 伸び率の上位10%にあたる値
 
   var activeGenres = new Set();
+  var activeMods = new Set();   // 掛け合わせ語。ジャンルとはANDで効かせる
   var els = {
     sort: document.getElementById('sort'),
     period: document.getElementById('period'),
     keyword: document.getElementById('keyword'),
     q: document.getElementById('q'),
     genres: document.getElementById('genres'),
+    modifiers: document.getElementById('modifiers'),
     list: document.getElementById('list'),
     count: document.getElementById('count'),
     summary: document.getElementById('summary'),
@@ -746,13 +796,15 @@ TEMPLATE = r"""
     els.keyword.appendChild(o);
   });
 
-  // --- ジャンルの絞り込み ---
-  // 対象の10ジャンルを全部並べる。ローテーションで今日まだ回っていないジャンルを
-  // 隠すと、扱う範囲が狭まったように見えるため。
-  // ジャンルが10個並ぶので、どれを押したか数えなくても戻れる「すべて」を先頭に置く。
+  // --- 絞り込みのチップ（2段構え） ---
+  // 上段: 主ジャンル。単独で検索して意味のある語。
+  // 下段: 掛け合わせ語。「経営」「メニュー」のように単独だと飲食や一般ビジネスを
+  //       拾ってしまう語で、本文に該当語があるかで絞る。
+  // どちらも対象を全部並べる。今日まだ回っていないものを隠すと、
+  // 扱う範囲が狭まったように見えるため。
   var chipStates = [];
 
-  function makeChip(label, onActivate) {
+  function makeChip(row, label, onActivate) {
     var b = mk('span', 'chip');
     b.appendChild(mk('span', 'chip-name', label));
     if (onActivate) {
@@ -766,9 +818,9 @@ TEMPLATE = r"""
       // 1件も無いので押しても何も起きない。操作対象から外す
       b.classList.add('pending');
       b.setAttribute('aria-disabled', 'true');
-      b.title = 'まだ収集していません';
+      b.title = '該当する投稿がまだありません';
     }
-    els.genres.appendChild(b);
+    row.appendChild(b);
     return b;
   }
 
@@ -780,24 +832,41 @@ TEMPLATE = r"""
     });
   }
 
-  var allChip = makeChip('すべて', function () {
-    activeGenres.clear();
-    syncChips();
-    render();
-  });
-  chipStates.push({ el: allChip, isOn: function () { return activeGenres.size === 0; } });
-
-  GENRES.forEach(function (pair) {
-    var g = pair[0];
-    if (pair[1] === 0) { makeChip(g, null); return; }
-    var chip = makeChip(g, function () {
-      if (activeGenres.has(g)) activeGenres.delete(g);
-      else activeGenres.add(g);
+  // 選んだ集合を切り替えるチップを1つ作る。上段と下段で作りが同じなのでまとめる
+  function addToggleChip(row, name, active) {
+    var chip = makeChip(row, name, function () {
+      if (active.has(name)) active.delete(name);
+      else active.add(name);
       syncChips();
       render();
     });
-    chipStates.push({ el: chip, isOn: function () { return activeGenres.has(g); } });
+    chipStates.push({ el: chip, isOn: function () { return active.has(name); } });
+  }
+
+  function addAllChip(row, active) {
+    var chip = makeChip(row, 'すべて', function () {
+      active.clear();
+      syncChips();
+      render();
+    });
+    chipStates.push({ el: chip, isOn: function () { return active.size === 0; } });
+  }
+
+  addAllChip(els.genres, activeGenres);
+  GENRES.forEach(function (pair) {
+    if (pair[1] === 0) { makeChip(els.genres, pair[0], null); return; }
+    addToggleChip(els.genres, pair[0], activeGenres);
   });
+
+  if (MODIFIERS.length === 0) {
+    els.modifiers.remove();
+  } else {
+    addAllChip(els.modifiers, activeMods);
+    MODIFIERS.forEach(function (pair) {
+      if (pair[1] === 0) { makeChip(els.modifiers, pair[0], null); return; }
+      addToggleChip(els.modifiers, pair[0], activeMods);
+    });
+  }
 
   syncChips();
 
@@ -820,6 +889,13 @@ TEMPLATE = r"""
       if (activeGenres.size > 0) {
         var hit = p.genres.some(function (g) { return activeGenres.has(g); });
         if (!hit) return false;
+      }
+      // 掛け合わせはジャンルとAND。「オンライン秘書」かつ「経営」を出すため。
+      // 掛け合わせ語どうしはOR（複数選ぶと候補が広がる）
+      if (activeMods.size > 0) {
+        var mods = p.mods || [];
+        var hitMod = mods.some(function (m) { return activeMods.has(m); });
+        if (!hitMod) return false;
       }
       if (q) {
         var hay = (p.text + ' ' + p.username).toLowerCase();
@@ -935,8 +1011,11 @@ def main():
     rows.sort(key=lambda r: r["likes"], reverse=True)
 
     config_genres = load_config_genres(args.config)
+    config_modifiers = load_config_modifiers(args.config)
+    tag_modifiers(rows, config_modifiers)
     html = render_html(
-        rows, now_jst_iso()[:16].replace("T", " "), store, len(all_rows), config_genres
+        rows, now_jst_iso()[:16].replace("T", " "), store, len(all_rows),
+        config_genres, config_modifiers,
     )
 
     args.output.parent.mkdir(parents=True, exist_ok=True)

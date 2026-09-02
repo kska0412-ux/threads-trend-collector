@@ -23,8 +23,8 @@ function check(label, cond, actual) {
 }
 
 console.log('--- 1. 初期描画 ---');
-check('カード8件', n() === 8, n());
-check('件数表示', doc.getElementById('count').textContent === '8 件を表示', doc.getElementById('count').textContent);
+check('カード10件', n() === 10, n());
+check('件数表示', doc.getElementById('count').textContent === '10 件を表示', doc.getElementById('count').textContent);
 check('デフォルトはvelocity順(hair_clinic_jpが1位)', users()[0] === 'hair_clinic_jp', users().slice(0,3));
 
 console.log('--- 2. 並び替え ---');
@@ -39,16 +39,16 @@ sortEl.value = 'velocity'; fire(sortEl, 'change');
 console.log('--- 3. 期間フィルタ ---');
 const per = doc.getElementById('period');
 per.value = '7'; fire(per, 'change');
-check('7日以内(168h)で5件', n() === 5, { count: n(), users: users() });
+check('7日以内(168h)で7件', n() === 7, { count: n(), users: users() });
 per.value = '30'; fire(per, 'change');
-check('30日以内(720h)で7件[700h=29.2日のp8含む]', n() === 7, { count: n(), users: users() });
+check('30日以内(720h)で9件[700h=29.2日のp8含む]', n() === 9, { count: n(), users: users() });
 per.value = '0'; fire(per, 'change');
-check('全期間に戻すと8件', n() === 8, n());
+check('全期間に戻すと10件', n() === 10, n());
 
 console.log('--- 4. ジャンル絞り込み ---');
 const chipName = c => c.querySelector('.chip-name').textContent;
 const click = c => c.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
-const chips = [...doc.querySelectorAll('.chip')];
+const chips = [...doc.querySelectorAll('#genres .chip')];
 const pending = chips.filter(c => c.classList.contains('pending'));
 
 // 対象は10ジャンル。ローテーションで今日まだ回っていないジャンルを隠すと、
@@ -56,18 +56,19 @@ const pending = chips.filter(c => c.classList.contains('pending'));
 // ジャンル構成は変わりうるので、数は直書きせず見出しの宣言と突き合わせる。
 // フィクスチャは3ジャンルぶんのデータを持つ
 const declared = Number((doc.querySelector('.ver').textContent.match(/(\d+)ジャンル/) || [])[1]);
+const WITH_DATA = 4;   // フィクスチャがデータを持つジャンル数（育毛/エステティシャン/ヘッドスパ/セラピスト）
 check('見出しがジャンル数を名乗る', declared > 0, doc.querySelector('.ver').textContent);
 check('「すべて」＋宣言どおりのジャンルが並ぶ', chips.length === declared + 1,
       { chips: chips.length, declared });
 check('先頭が「すべて」', chipName(chips[0]) === 'すべて', chipName(chips[0]));
-check('データが無いジャンルも並ぶ', pending.length === declared - 3, pending.map(chipName));
-check('データがある3ジャンルは選べる',
-      chips.length - 1 - pending.length === 3,
+check('データが無いジャンルも並ぶ', pending.length === declared - WITH_DATA, pending.map(chipName));
+check('データがあるジャンルは選べる',
+      chips.length - 1 - pending.length === WITH_DATA,
       chips.filter(c => !c.classList.contains('pending')).map(chipName));
 check('件数の数字は出さない', doc.querySelector('.chip-n') === null, doc.querySelector('.chip-n'));
 check('データがあるジャンルが先に並ぶ',
-      chips.slice(1, 4).every(c => !c.classList.contains('pending')),
-      chips.slice(1, 4).map(chipName));
+      chips.slice(1, 1 + WITH_DATA).every(c => !c.classList.contains('pending')),
+      chips.slice(1, 1 + WITH_DATA).map(chipName));
 check('未収集は押せないことが伝わる',
       pending.every(c => c.getAttribute('aria-disabled') === 'true' && !c.hasAttribute('tabindex')),
       pending.map(c => [chipName(c), c.getAttribute('aria-disabled'), c.getAttribute('tabindex')]));
@@ -77,12 +78,12 @@ check('初期状態は「すべて」が点灯', chips[0].classList.contains('on
 
 // 押しても何も起きないこと。空振りで0件になるのが一番まずい
 click(pending[0]);
-check('未収集chipを押しても表示は変わらない', n() === 8, { count: n(), chip: chipName(pending[0]) });
+check('未収集chipを押しても表示は変わらない', n() === 10, { count: n(), chip: chipName(pending[0]) });
 check('未収集chipは点灯しない', !pending[0].classList.contains('on'), pending[0].className);
 
 const facial = chips.find(c => chipName(c) === 'エステティシャン');
 click(facial);
-check('エステティシャンのみ3件', n() === 3, { count: n(), users: users() });
+check('エステティシャンのみ4件', n() === 4, { count: n(), users: users() });
 check('chipにonクラス', facial.classList.contains('on'), facial.className);
 check('選択中は「すべて」が消灯', !chips[0].classList.contains('on'), chips[0].className);
 check('aria-pressedが連動する', facial.getAttribute('aria-pressed') === 'true',
@@ -91,11 +92,11 @@ check('aria-pressedが連動する', facial.getAttribute('aria-pressed') === 'tr
 // 複数ジャンルはOR。押した分だけ増える
 const hage = chips.find(c => chipName(c) === '育毛');
 click(hage);
-check('2ジャンル選ぶとOR（6件）', n() === 6, { count: n(), users: users() });
+check('2ジャンル選ぶとOR（7件）', n() === 7, { count: n(), users: users() });
 
 // 「すべて」で一括解除できる。10ジャンルを押し戻して回らずに済む
 click(chips[0]);
-check('「すべて」で解除して8件に戻る', n() === 8, n());
+check('「すべて」で解除して10件に戻る', n() === 10, n());
 check('解除後はジャンルchipが全部消灯',
       chips.slice(1).every(c => !c.classList.contains('on')),
       chips.slice(1).map(c => c.className));
@@ -103,20 +104,63 @@ check('解除後は「すべて」が点灯', chips[0].classList.contains('on'),
 
 // キーボードでも操作できる
 facial.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
-check('Enterキーでも絞り込める', n() === 3, n());
+check('Enterキーでも絞り込める', n() === 4, n());
 click(facial);
-check('もう一度押すと解除される', n() === 8, n());
+check('もう一度押すと解除される', n() === 10, n());
 
 console.log('--- 4b. 見出しのジャンル数 ---');
 // データにある数ではなく、設定にある数を出す。でないと収集が一周する前は
 // 対象が3ジャンルだけに見えてしまう
 // データがあるのは3ジャンルだけ。そこを数えると対象が狭まったように見える
 const verText = doc.querySelector('.ver').textContent;
-check('データの数ではなく設定の数を名乗る', declared > 3, verText);
+check('データの数ではなく設定の数を名乗る', declared > WITH_DATA, verText);
+
+console.log('--- 4c. 掛け合わせ（2段目） ---');
+// 「経営」「メニュー」は単独で検索すると飲食や一般ビジネスを拾うので、
+// 主ジャンルとの掛け合わせでしか使わない。ページ側は本文で判定する
+const mods = [...doc.querySelectorAll('#modifiers .chip')];
+const modName = c => c.querySelector('.chip-name').textContent;
+check('掛け合わせの行がある', mods.length > 1, mods.length);
+check('先頭が「すべて」', modName(mods[0]) === 'すべて', modName(mods[0]));
+check('どちらの行か分かるラベルが付く',
+      [...doc.querySelectorAll('.filter-label')].map(e => e.textContent).join('/') === 'ジャンル/掛け合わせ',
+      [...doc.querySelectorAll('.filter-label')].map(e => e.textContent));
+// 掛け合わせ語は単独ジャンルとしては出さない。出すと元の問題に戻る
+check('掛け合わせ語がジャンル行に混ざっていない',
+      mods.slice(1).every(m => !chips.some(c => chipName(c) === modName(m))),
+      mods.slice(1).map(modName).filter(m => chips.some(c => chipName(c) === m)));
+
+const keiei = mods.find(c => modName(c) === '経営');
+check('「経営」のチップがある', keiei !== undefined, mods.map(modName));
+click(keiei);
+// フィクスチャで本文に「売上」「集客」「リピート」を含むのは p9 だけ
+check('経営だけで1件', n() === 1, { count: n(), users: users() });
+check('その1件が本文に該当語を持つ',
+      users()[0] === 'salon_keiei', users());
+
+// ジャンルとはAND。「エステティシャン」かつ「経営」を出すための組み合わせ
+const esthe = chips.find(c => chipName(c) === 'エステティシャン');
+click(esthe);
+check('ジャンルとANDで効く', n() === 1, { count: n(), users: users() });
+const sera = chips.find(c => chipName(c) === 'セラピスト');
+click(esthe);
+click(sera);
+check('該当しないジャンルと組むと0件', n() === 0, { count: n(), users: users() });
+click(sera);
+
+// 掛け合わせ語どうしはOR。候補を広げるため
+const school = mods.find(c => modName(c) === 'スクール');
+click(school);
+check('掛け合わせどうしはOR（2件）', n() === 2, { count: n(), users: users() });
+click(mods[0]);
+check('掛け合わせを解除すると全件に戻る', n() === 10, n());
+check('解除後は掛け合わせchipが全部消灯',
+      mods.slice(1).every(c => !c.classList.contains('on')),
+      mods.slice(1).map(c => c.className));
 
 console.log('--- 5. キーワード絞り込み ---');
 const kwEl = doc.getElementById('keyword');
-check('キーワードoption数(ユニーク12+すべて=13)', kwEl.options.length === 13, kwEl.options.length);
+check('キーワードoption数(ユニーク14+すべて=15)', kwEl.options.length === 15, kwEl.options.length);
 kwEl.value = 'AGA'; fire(kwEl, 'change');
 check('AGAで2件', n() === 2, { count: n(), users: users() });
 kwEl.value = ''; fire(kwEl, 'change');
@@ -155,7 +199,7 @@ check('4枚は4列で割り切れる', 4 % 4 === 0, null);
 check('狭い画面では2列', /\.summary\s*\{\s*grid-template-columns:\s*repeat\(2,\s*1fr\)/.test(css9), null);
 check('4枚は2列でも割り切れる', 4 % 2 === 0, null);
 const totalTile = tiles.find(t => t.querySelector('.stat-label').textContent === '表示中の投稿');
-check('表示件数が8件', totalTile.querySelector('.stat-value').textContent.startsWith('8'), totalTile.textContent);
+check('表示件数が10件', totalTile.querySelector('.stat-value').textContent.startsWith('10'), totalTile.textContent);
 const stampText = doc.getElementById('stamp').textContent;
 check('最終収集の表示がある', stampText.includes('最終収集'), stampText);
 // HTMLを作り直しただけで時刻が進むと、更新されていないのに更新されたように見える
@@ -175,7 +219,7 @@ const barName = b => b.querySelector('.bar-name').textContent;
 const pendingBars = bars.filter(b => b.classList.contains('pending'));
 check('設定のジャンルぶん棒が並ぶ', bars.length === declared, bars.map(barName));
 check('見出しが出る', doc.querySelector('.breakdown-title').textContent === 'ジャンル別', null);
-check('未収集の棒はデータのある3ジャンルを除いた数', pendingBars.length === declared - 3, pendingBars.map(barName));
+check('未収集の棒はデータのあるジャンルを除いた数', pendingBars.length === declared - WITH_DATA, pendingBars.map(barName));
 const widths = bars.map(b => parseFloat(b.querySelector('.bar-fill').style.width));
 check('最多ジャンルが100%', Math.max(...widths) === 100, widths);
 check('棒の長さが件数順に並ぶ', widths.every((w, i) => i === 0 || widths[i - 1] >= w), widths);
