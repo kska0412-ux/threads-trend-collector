@@ -60,9 +60,60 @@ const WITH_DATA = 4;   // フィクスチャがデータを持つジャンル数
 const declared = Number((doc.querySelector('.ver').textContent.match(/(\d+)ジャンル/) || [])[1]);
 check('見出しがジャンル数を名乗る', declared > 0, doc.querySelector('.ver').textContent);
 check('データの数ではなく設定の数を名乗る', declared > WITH_DATA, doc.querySelector('.ver').textContent);
-const suggest = [...doc.querySelectorAll('#genre-suggest option')].map(o => o.value);
+const suggest = [...doc.querySelectorAll('#genre-suggest .suggest-item')].map(o => o.textContent);
 check('入力候補に設定のジャンルが全部並ぶ', suggest.length === declared, { suggest: suggest.length, declared });
-check('検索窓と入力候補がつながっている', doc.getElementById('q').getAttribute('list') === 'genre-suggest', null);
+check('検索窓と入力候補がつながっている', doc.getElementById('q').getAttribute('aria-controls') === 'genre-suggest', null);
+// <datalist> は iPhone の Safari などで一覧が出ないので使わない
+check('datalist を使っていない', doc.querySelector('datalist') === null && !doc.getElementById('q').hasAttribute('list'), null);
+
+console.log('--- 4c. 入力候補の出し入れ（スマホでも出る自前の一覧） ---');
+const qs = doc.getElementById('q');
+const box = doc.getElementById('genre-suggest');
+const shownItems = () => [...box.querySelectorAll('.suggest-item')].filter(li => !li.hidden).map(li => li.textContent);
+check('最初は閉じている', box.hidden === true, box.hidden);
+qs.dispatchEvent(new window.FocusEvent('focus'));
+check('タップ（フォーカス）で開く', box.hidden === false && qs.getAttribute('aria-expanded') === 'true', box.hidden);
+check('空欄なら全ジャンルが出る', shownItems().length === declared, shownItems().length);
+qs.value = 'へっど'; fire(qs, 'input');
+check('打ちかけの語で絞る（ひらがなでも当たる）', shownItems().join('/') === 'ヘッドスパ', shownItems());
+qs.value = 'ざざざ'; fire(qs, 'input');
+check('当たる候補が無ければ閉じる', box.hidden === true, shownItems());
+qs.value = '頭皮 へっど'; fire(qs, 'input');
+check('最後の語で絞る', shownItems().join('/') === 'ヘッドスパ', shownItems());
+// タップで選ぶ。押した瞬間にフォーカスが外れて一覧が閉じないこと
+const item = [...box.querySelectorAll('.suggest-item')].find(li => li.textContent === 'ヘッドスパ');
+const md = new window.MouseEvent('mousedown', { bubbles: true, cancelable: true });
+item.dispatchEvent(md);
+check('押した瞬間はフォーカスを動かさない', md.defaultPrevented, null);
+item.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+check('選ぶと最後の語が置き換わる', qs.value === '頭皮 ヘッドスパ', qs.value);
+check('選ぶと閉じる', box.hidden === true && qs.getAttribute('aria-expanded') === 'false', box.hidden);
+check('選ぶと検索が効く（頭皮かつヘッドスパ＝p3）', n() === 1 && users()[0] === 'ikumou_lab', users());
+// 外をタップ（フォーカスが外れる）と閉じる
+qs.dispatchEvent(new window.FocusEvent('focus'));
+qs.dispatchEvent(new window.FocusEvent('blur'));
+check('外をタップすると閉じる', box.hidden === true, box.hidden);
+// キーボード操作（PC）
+qs.value = ''; fire(qs, 'input');
+qs.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true, cancelable: true }));
+check('↓で先頭の候補が選択状態', box.querySelector('.suggest-item.active') !== null &&
+      box.querySelector('.suggest-item.active').textContent === suggest[0],
+      box.querySelector('.suggest-item.active') && box.querySelector('.suggest-item.active').textContent);
+const ent = new window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true });
+qs.dispatchEvent(ent);
+check('Enterで選択中の候補に決まる', qs.value === suggest[0] && ent.defaultPrevented, qs.value);
+qs.dispatchEvent(new window.FocusEvent('focus'));
+qs.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+check('Escで閉じる', box.hidden === true, box.hidden);
+// 変換中の Enter では候補を決めない
+qs.value = ''; fire(qs, 'input');
+qs.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true, cancelable: true }));
+qs.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true, isComposing: true }));
+check('変換確定のEnterでは決めない', qs.value === '', qs.value);
+qs.dispatchEvent(new window.FocusEvent('blur'));
+qs.value = ''; fire(qs, 'input');
+qs.dispatchEvent(new window.FocusEvent('blur'));
+check('候補を閉じて全件に戻る', box.hidden === true && n() === 10, { hidden: box.hidden, n: n() });
 check('入力候補にデータのあるジャンルが入る',
       ['育毛', 'エステティシャン', 'ヘッドスパ', 'セラピスト'].every(g => suggest.includes(g)), suggest);
 check('依頼の新ジャンルが候補に入る',

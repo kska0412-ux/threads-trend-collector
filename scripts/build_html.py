@@ -365,8 +365,10 @@ TEMPLATE = r"""
   }
   /* 検索窓がこのページの主役。ジャンルのタブは置かず、調べたい語を打って探す */
   .search-row { flex-wrap: nowrap; }
+  /* 候補の一覧を検索窓の真下に重ねるための枠 */
+  .search-box { position: relative; flex: 1; min-width: 0; display: flex; }
   input[type=search] {
-    flex: 1; min-width: 0;
+    flex: 1; min-width: 0; width: 100%;
     font-size: 1rem;
     padding: 11px 14px;
     border-width: 1.5px;
@@ -380,6 +382,27 @@ TEMPLATE = r"""
     background: var(--accent); color: var(--surface);
     cursor: pointer; white-space: nowrap;
   }
+  /* 収集ジャンルの候補。<datalist> は iPhone の Safari などで一覧が出ないので、
+     自前で組んで検索窓の下に重ねる。どの端末でもタップで選べる */
+  .suggest {
+    position: absolute; top: calc(100% + 4px); left: 0; right: 0; z-index: 30;
+    margin: 0; padding: 4px 0; list-style: none;
+    max-height: min(50vh, 320px); overflow-y: auto;
+    -webkit-overflow-scrolling: touch; overscroll-behavior: contain;
+    background: var(--surface);
+    border: 1px solid var(--border); border-radius: 10px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, .14);
+  }
+  .suggest[hidden] { display: none; }
+  .suggest-item {
+    /* ジャンル名は途中で割らない */
+    white-space: nowrap;
+    font-size: .92rem; line-height: 1.4;
+    padding: 11px 14px;
+    cursor: pointer;
+  }
+  .suggest-item[hidden] { display: none; }
+  .suggest-item:hover, .suggest-item.active { background: var(--accent-soft); color: var(--accent); }
   .hint {
     font-size: .74rem; color: var(--muted);
     margin: 8px 0 0; line-height: 1.6;
@@ -462,12 +485,16 @@ TEMPLATE = r"""
 
   <div class="controls">
     <form class="row search-row" id="search" role="search">
-      <input type="search" id="q" list="genre-suggest" autocomplete="off"
-             enterkeyhint="search" aria-label="検索ワード"
-             placeholder="調べたいワード（例: マツエク 集客）">
+      <div class="search-box">
+        <input type="search" id="q" autocomplete="off"
+               enterkeyhint="search" aria-label="検索ワード"
+               role="combobox" aria-autocomplete="list"
+               aria-controls="genre-suggest" aria-expanded="false"
+               placeholder="調べたいワード（例: マツエク 集客）">
+        <ul class="suggest" id="genre-suggest" role="listbox" aria-label="収集ジャンル" hidden></ul>
+      </div>
       <button type="submit" class="search-btn">検索</button>
     </form>
-    <datalist id="genre-suggest"></datalist>
     <p class="hint" id="hint"></p>
     <div class="row sort-row">
       <select id="sort">
@@ -565,11 +592,82 @@ TEMPLATE = r"""
     });
   }
 
-  // 入力候補。タブの代わりに、何を探せるかを打ちかけたときに見せる
-  GENRES.forEach(function (g) {
-    var o = document.createElement('option');
-    o.value = g;
-    els.suggest.appendChild(o);
+  // --- 入力候補 ---
+  // タブの代わりに、検索窓をタップしたとき収集ジャンルを一覧で見せる。
+  // <datalist> は iPhone の Safari などで一覧が出ないので自前で組む。
+  // 候補は打ちかけの最後の語で絞る（ひらがなでも当たる）。選ぶとその語に置き換える
+  var suggestItems = GENRES.map(function (g) {
+    var li = mk('li', 'suggest-item', g);
+    li.setAttribute('role', 'option');
+    li.id = 'suggest-' + GENRES.indexOf(g);
+    li.dataset.genre = g;
+    li.dataset.key = kana(g);
+    els.suggest.appendChild(li);
+    return li;
+  });
+  var activeIndex = -1;
+
+  function lastWord(v) {
+    var m = String(v).match(/(^|\s)(\S*)$/);
+    return m ? m[2] : '';
+  }
+
+  function visibleItems() {
+    return suggestItems.filter(function (li) { return !li.hidden; });
+  }
+
+  function setActive(i) {
+    var items = visibleItems();
+    suggestItems.forEach(function (li) { li.classList.remove('active'); li.removeAttribute('aria-selected'); });
+    activeIndex = items.length ? Math.max(-1, Math.min(i, items.length - 1)) : -1;
+    if (activeIndex >= 0) {
+      var li = items[activeIndex];
+      li.classList.add('active');
+      li.setAttribute('aria-selected', 'true');
+      els.q.setAttribute('aria-activedescendant', li.id);
+      if (li.scrollIntoView) li.scrollIntoView({ block: 'nearest' });
+    } else {
+      els.q.removeAttribute('aria-activedescendant');
+    }
+  }
+
+  function openSuggest() {
+    var key = kana(lastWord(els.q.value));
+    var shown = 0;
+    suggestItems.forEach(function (li) {
+      var hit = !key || li.dataset.key.indexOf(key) !== -1;
+      li.hidden = !hit;
+      if (hit) shown++;
+    });
+    els.suggest.hidden = shown === 0;
+    els.q.setAttribute('aria-expanded', shown ? 'true' : 'false');
+    setActive(-1);
+  }
+
+  function closeSuggest() {
+    els.suggest.hidden = true;
+    els.q.setAttribute('aria-expanded', 'false');
+    setActive(-1);
+  }
+
+  // 選んだジャンルで、打ちかけの最後の語を置き換えて検索する。
+  // スマホではキーボードを閉じて結果を見せる
+  function pickGenre(g) {
+    var v = els.q.value;
+    var rest = v.slice(0, v.length - lastWord(v).length);
+    els.q.value = rest + g;
+    closeSuggest();
+    render();
+    writeUrlQuery();
+    els.q.blur();
+  }
+
+  // タップした瞬間に検索窓からフォーカスが外れると、先に一覧が閉じて
+  // 選べなくなる。押した時点ではフォーカスを動かさない
+  els.suggest.addEventListener('mousedown', function (e) { e.preventDefault(); });
+  els.suggest.addEventListener('click', function (e) {
+    var li = e.target.closest ? e.target.closest('.suggest-item') : null;
+    if (li) pickGenre(li.dataset.genre);
   });
 
   // 検索欄の下の一言。自前の文言なので文節ごとに .nb で囲う
@@ -698,7 +796,24 @@ TEMPLATE = r"""
     el.addEventListener('change', render);
   });
   // 打つそばから絞り込む。3000件なら入力のたびに描き直しても引っかからない
-  els.q.addEventListener('input', function () { render(); writeUrlQuery(); });
+  els.q.addEventListener('input', function () { render(); writeUrlQuery(); openSuggest(); });
+  els.q.addEventListener('focus', openSuggest);
+  // 一覧の外をタップしたら閉じる
+  els.q.addEventListener('blur', closeSuggest);
+  // PC では矢印キーで候補を選び、Enter で決める。Esc で閉じる
+  els.q.addEventListener('keydown', function (e) {
+    if (e.isComposing || composing) return;
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      if (els.suggest.hidden) openSuggest();
+      e.preventDefault();
+      setActive(activeIndex + (e.key === 'ArrowDown' ? 1 : -1));
+    } else if (e.key === 'Enter' && activeIndex >= 0 && !els.suggest.hidden) {
+      e.preventDefault();
+      pickGenre(visibleItems()[activeIndex].dataset.genre);
+    } else if (e.key === 'Escape') {
+      closeSuggest();
+    }
+  });
   // 日本語入力の変換を確定する Enter で、検索が走ってキーボードが閉じないようにする。
   // isComposing だけでは Safari で確定直後の Enter を取りこぼすので、
   // compositionend の直後も1拍だけ「変換中」とみなす
@@ -712,6 +827,7 @@ TEMPLATE = r"""
   els.search.addEventListener('submit', function (e) {
     e.preventDefault();
     if (composing) return;
+    closeSuggest();
     render();
     writeUrlQuery();
     els.q.blur();
