@@ -23,7 +23,7 @@ from datetime import datetime
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from common import (  # noqa: E402
-    BASE_DIR, CONFIG_FILE, DATA_FILE, JST, now_jst_iso, parse_timestamp,
+    BASE_DIR, CONFIG_FILE, DATA_FILE, JST, parse_timestamp,
 )
 
 # GitHub Pages は main ブランチの /docs をそのまま配信できるので、ここに出す
@@ -206,19 +206,6 @@ def rising_threshold(rows):
     return values[index]
 
 
-def build_summary(rows, store, archived):
-    """一覧の上に出す集計。詳細より先に全体像が分かるようにする。"""
-    week = [r for r in rows if r["ageHours"] is not None and r["ageHours"] <= 168]
-    return {
-        "total": len(rows),
-        "archived": archived,
-        "over1000": len([r for r in rows if r["likes"] >= 1000]),
-        "thisWeek": len(week),
-        "authors": len({r["username"] for r in rows}),
-        "updatedAt": (store.get("updated_at") or "")[:16].replace("T", " "),
-    }
-
-
 def search_genres(rows, config_genres=()):
     """
     検索窓の候補に出すジャンル名。設定に書いた順に、設定に無いが
@@ -238,16 +225,13 @@ def search_genres(rows, config_genres=()):
     return names
 
 
-def render_html(rows, generated_at, store, archived, config_genres=()):
-    summary = build_summary(rows, store, archived)
+def render_html(rows, config_genres=()):
     genres = search_genres(rows, config_genres)
 
     return (
         TEMPLATE.replace("__DATA__", embed_json(rows))
         .replace("__GENRES__", embed_json(genres))
-        .replace("__SUMMARY__", embed_json(summary))
         .replace("__RISING__", rising_js(rows))
-        .replace("__GENERATED__", generated_at)
         .replace("__GENRE_COUNT__", str(len(genres)))
         .replace("__COUNT__", str(len(rows)))
     )
@@ -357,46 +341,8 @@ TEMPLATE = r"""
     margin-top: 6px;
   }
 
-  /* --- 集計：詳細より先に全体像を出す --- */
-  .panel {
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    overflow: hidden;
-    background: var(--surface);
-    margin: 28px 0 8px;
-  }
-  /* 4枚で固定する。auto-fit だと枚数によって最後の1枚だけ次の行に
-     取り残され、空いた枠が塗り残しに見えてしまうため。 */
-  .summary {
-    display: grid;
-    grid-template-columns: repeat(4, 1fr);
-    gap: 1px;
-    background: var(--border);
-  }
-  @media (max-width: 620px) {
-    /* 4枚なので2列でもきれいに埋まる */
-    .summary { grid-template-columns: repeat(2, 1fr); }
-  }
-  .stat { background: var(--surface); padding: 14px 16px; }
-
-  .stat-label {
-    font-size: .7rem; color: var(--muted); letter-spacing: .06em;
-    display: block; margin-bottom: 4px;
-    /* 「表示中/の投稿」のように助詞で割れないよう、まとめて扱う */
-    white-space: nowrap;
-  }
-  .stat-value {
-    white-space: nowrap;
-    font-family: "Roboto Mono", ui-monospace, monospace;
-    font-size: 1.25rem; font-weight: 700;
-    font-variant-numeric: tabular-nums;
-    line-height: 1.2;
-  }
-  .stat-value .unit { font-size: .72rem; font-weight: 400; color: var(--muted); margin-left: 3px; }
-  .stamp {
-    font-family: "Roboto Mono", ui-monospace, monospace;
-    font-size: .7rem; color: var(--muted); margin: 0 0 26px;
-  }
+  /* 集計タイルと最終収集の行は廃止した。見出しのすぐ下に検索窓を置く */
+  header { margin-bottom: 22px; }
 
   /* --- 操作バー --- */
   .controls {
@@ -514,11 +460,6 @@ TEMPLATE = r"""
     <h1>Threads Research Tool<span class="ver"><span class="nb">美容ビジネス</span><span class="nb">（__GENRE_COUNT__ジャンル）</span></span></h1>
   </header>
 
-  <div class="panel">
-    <div class="summary" id="summary"></div>
-  </div>
-  <p class="stamp" id="stamp"></p>
-
   <div class="controls">
     <form class="row search-row" id="search" role="search">
       <input type="search" id="q" list="genre-suggest" autocomplete="off"
@@ -548,13 +489,11 @@ TEMPLATE = r"""
 
 <script id="data" type="application/json">__DATA__</script>
 <script id="genre-list" type="application/json">__GENRES__</script>
-<script id="summary-data" type="application/json">__SUMMARY__</script>
 <script>
 (function () {
   var readJSON = function (id) { return JSON.parse(document.getElementById(id).textContent); };
   var POSTS = readJSON('data');
   var GENRES = readJSON('genre-list');
-  var SUMMARY = readJSON('summary-data');
   var RISING = __RISING__;   // 伸び率の上位10%にあたる値
 
   var els = {
@@ -565,8 +504,7 @@ TEMPLATE = r"""
     suggest: document.getElementById('genre-suggest'),
     hint: document.getElementById('hint'),
     list: document.getElementById('list'),
-    count: document.getElementById('count'),
-    summary: document.getElementById('summary')
+    count: document.getElementById('count')
   };
 
   function mk(tag, cls, text) {
@@ -582,38 +520,6 @@ TEMPLATE = r"""
     list.forEach(function (t) { parent.appendChild(mk('span', 'nb', t)); });
     return parent;
   }
-
-  // --- 集計 ---
-  // タイルは必ず4枚。ジャンルはここに混ぜず、下の棒グラフで見せる。
-  (function renderSummary() {
-    var tiles = [
-      ['表示中の投稿', SUMMARY.total, '件'],
-      ['直近7日の投稿', SUMMARY.thisWeek, '件'],
-      ['1000いいね超え', SUMMARY.over1000, '件'],
-      ['投稿者', SUMMARY.authors, '人']
-    ];
-    tiles.forEach(function (t) {
-      var box = mk('div', 'stat');
-      box.appendChild(mk('span', 'stat-label', t[0]));
-      var v = mk('div', 'stat-value', t[1].toLocaleString());
-      v.appendChild(mk('span', 'unit', t[2]));
-      box.appendChild(v);
-      els.summary.appendChild(box);
-    });
-  })();
-
-  // 何件のうち何件を見ているのかを明示する。
-  // 「最終収集」は実際に収集した時刻。HTMLを作り直しただけでは進まない。
-  (function renderStamp() {
-    var stamp = document.getElementById('stamp');
-    var collectedAt = SUMMARY.updatedAt || '__GENERATED__';
-    var units = ['最終収集 ' + collectedAt];
-    if (SUMMARY.archived > SUMMARY.total) {
-      units.push('　/　蓄積 ' + SUMMARY.archived.toLocaleString() + ' 件のうち ');
-      units.push(SUMMARY.total.toLocaleString() + ' 件を表示');
-    }
-    phrases(stamp, units);
-  })();
 
   // --- 検索 ---
   // ジャンルのタブは置かない。調べたい語を打つと、その語で伸びている投稿が出る。
@@ -846,10 +752,7 @@ def main():
     rows.sort(key=lambda r: r["likes"], reverse=True)
 
     config_genres = load_config_genres(args.config)
-    html = render_html(
-        rows, now_jst_iso()[:16].replace("T", " "), store, len(all_rows),
-        config_genres,
-    )
+    html = render_html(rows, config_genres)
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(html, encoding="utf-8")

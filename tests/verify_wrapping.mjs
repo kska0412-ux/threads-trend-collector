@@ -84,8 +84,6 @@ const startsWithParticle = allUnits.filter(t => PARTICLES.some(p => t.startsWith
 check('助詞で始まるかたまりが無い', startsWithParticle.length === 0, startsWithParticle);
 
 console.log('--- 4. 数値と単位、短いラベル ---');
-check('数値と単位が離れない', /\.stat-value\s*\{[^}]*white-space:\s*nowrap/s.test(css), null);
-check('集計ラベルが途中で割れない', /\.stat-label\s*\{[^}]*white-space:\s*nowrap/s.test(css), null);
 check('件数表示が途中で割れない', /\.count\s*\{[^}]*white-space:\s*nowrap/s.test(css), null);
 check('タグが途中で割れない', /\.tag\s*\{[^}]*white-space:\s*nowrap/s.test(css), null);
 check('伸び中バッジが途中で割れない', /\.badge\s*\{[^}]*white-space:\s*nowrap/s.test(css), null);

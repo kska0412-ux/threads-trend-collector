@@ -66,7 +66,7 @@ check('検索窓と入力候補がつながっている', doc.getElementById('q'
 check('入力候補にデータのあるジャンルが入る',
       ['育毛', 'エステティシャン', 'ヘッドスパ', 'セラピスト'].every(g => suggest.includes(g)), suggest);
 check('依頼の新ジャンルが候補に入る',
-      ['リラク', 'マッパ', '腸もみ', 'シミ', 'ハーブピーリング', '姿勢'].every(g => suggest.includes(g)), suggest);
+      ['リラク', 'まつ毛パーマ', '腸もみ', 'シミ', 'ハーブピーリング', '姿勢'].every(g => suggest.includes(g)), suggest);
 check('掛け合わせ語は候補に出さない', !suggest.includes('経営'), suggest.filter(g => g === '経営'));
 
 console.log('--- 5. 操作は検索窓と2つの選択肢だけ ---');
@@ -164,34 +164,19 @@ const link = doc.querySelector('.card .link');
 check('元投稿リンクがある', link && link.href.startsWith('https://www.threads.net/'), link && link.href);
 check('target=_blank + noopener', link.target === '_blank' && link.rel === 'noopener noreferrer', link.rel);
 
-console.log('--- 9. 集計タイル（余りを出さない） ---');
-const css9 = doc.querySelector('style').textContent;
-const tiles = [...doc.querySelectorAll('#summary .stat')];
-check('タイルはちょうど4枚', tiles.length === 4, tiles.length);
-const labels = tiles.map(t => t.querySelector('.stat-label').textContent);
-check('表示件数のタイルがある', labels.includes('表示中の投稿'), labels);
-// ジャンルをタイルに混ぜると枚数が変わり、最後の1枚が取り残される
-check('ジャンルはタイルに混ざっていない',
-      !labels.some(l => suggest.includes(l)), { labels });
-check('列数が固定（auto-fitではない）',
-      /\.summary\s*\{[^}]*grid-template-columns:\s*repeat\(4,\s*1fr\)/s.test(css9), null);
-check('4枚は4列で割り切れる', 4 % 4 === 0, null);
-check('狭い画面では2列', /\.summary\s*\{\s*grid-template-columns:\s*repeat\(2,\s*1fr\)/.test(css9), null);
-check('4枚は2列でも割り切れる', 4 % 2 === 0, null);
-const totalTile = tiles.find(t => t.querySelector('.stat-label').textContent === '表示中の投稿');
-check('表示件数が10件', totalTile.querySelector('.stat-value').textContent.startsWith('10'), totalTile.textContent);
-const stampText = doc.getElementById('stamp').textContent;
-check('最終収集の表示がある', stampText.includes('最終収集'), stampText);
-// HTMLを作り直しただけで時刻が進むと、更新されていないのに更新されたように見える
-const fixtureUpdatedAt = JSON.parse(fs.readFileSync(process.env.SCRATCH + '/fixture_posts.json', 'utf8')).updated_at.slice(0, 16).replace('T', ' ');
-check('最終収集は実際の収集時刻（HTML生成時刻ではない）', stampText.includes(fixtureUpdatedAt), { stamp: stampText, expected: fixtureUpdatedAt });
-// 8件すべて表示される版では「蓄積N件のうち」は出ないので、絞り込んだ版で確かめる
+console.log('--- 9. 集計タイルと最終収集の行は出さない ---');
+// 見出しのすぐ下に検索窓を置く。数字のタイルは検索の邪魔になるので廃止した
+check('集計タイルが無い', doc.getElementById('summary') === null && doc.querySelectorAll('.stat').length === 0,
+      doc.querySelectorAll('.stat').length);
+check('最終収集の行が無い', doc.getElementById('stamp') === null && !doc.body.textContent.includes('最終収集'), null);
+check('「表示中の投稿」の文言が無い', !doc.body.textContent.includes('表示中の投稿'), null);
+check('見出しの次が検索窓', doc.querySelector('header').nextElementSibling.classList.contains('controls'),
+      doc.querySelector('header').nextElementSibling.className);
+// 上限で絞った版でも、載せた件数だけカードが出る
 const trimmedDoc = new JSDOM(fs.readFileSync(process.env.SCRATCH + '/preview_trimmed.html', 'utf8'),
                              { runScripts: 'dangerously' }).window.document;
-const trimmedStamp = trimmedDoc.getElementById('stamp').textContent;
-check('絞り込んだときは蓄積件数も出る', /蓄積 \d+ 件のうち \d+ 件を表示/.test(trimmedStamp), trimmedStamp);
 check('絞り込んだ結果が3件', trimmedDoc.querySelectorAll('.card').length === 3, trimmedDoc.querySelectorAll('.card').length);
-check('絞り込んでいない版では蓄積件数を出さない', !stampText.includes('蓄積'), stampText);
+check('絞り込んだ版にも蓄積件数の行は出ない', !trimmedDoc.body.textContent.includes('蓄積'), null);
 
 console.log('--- 9c. カードのタグ ---');
 const cardTags = [...doc.querySelectorAll('.card')].map(c =>
