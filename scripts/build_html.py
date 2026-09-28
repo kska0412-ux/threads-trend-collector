@@ -34,13 +34,15 @@ VELOCITY_FLOOR_HOURS = 6.0
 
 # ページに載せる範囲。data/posts.json には全履歴が残り、ここで絞るのは表示分だけ。
 # 無制限にするとHTMLが際限なく太り、GitHubの1ファイル上限に当たって更新が止まる。
+# ページは検索して使うので、1ジャンルあたりの件数が薄いと検索しても数件しか出ない。
+# 40ジャンルで1500件だと1ジャンル37件まで縮むため、3000件（約2MB）にしている。
 DEFAULT_MAX_AGE_DAYS = 180
-DEFAULT_MAX_POSTS = 1500
+DEFAULT_MAX_POSTS = 3000
 
 # 各ジャンルに必ず確保する枠。
 # 上限を全体の順位だけで切ると、いいね数の絶対値が大きいジャンル（ダイエットなど）が
 # 枠を食い切り、ニッチなジャンル（パーマネントジュエリーなど）がページから消える。
-DEFAULT_PER_GENRE = 80
+DEFAULT_PER_GENRE = 60
 
 
 def build_rows(store, now=None):
@@ -178,79 +180,6 @@ def load_config_genres(path):
     return list(config.get("genres", {}))
 
 
-def split_genre_name(name):
-    """
-    ジャンル名を、折り返してよい単位に切る。JS 側の nameParts と同じ規則。
-    「・」は前の語に付ける。行頭に「・」が落ちるのを防ぐため。
-    """
-    parts = name.split("・")
-    return [p + "・" if i < len(parts) - 1 else p for i, p in enumerate(parts)]
-
-
-def pack_lines(parts, width):
-    """区切りを幅 width（文字数）の行に詰めたとき、何行になるか。"""
-    lines = 1
-    used = 0
-    for part in parts:
-        if used and used + len(part) > width:
-            lines += 1
-            used = len(part)
-        else:
-            used += len(part)
-    return lines
-
-
-def bar_name_layout(genres):
-    """
-    ジャンル別の棒グラフで、名前の列幅（em）と高さ（em）を決める。
-
-    列幅を名前に合わせて伸ばすと、行ごとに棒の開始位置がずれて長さを比べられない。
-    かといって短く固定すると、長い名前が棒に重なる。そこで「一番長い区切り」が
-    1行に収まる幅を、実際のジャンル名から計算して全行に効かせる。
-
-    区切りは「・」の位置だけ。カタカナ語の途中では割らないので、「・」を含まない
-    長い名前（パーマネントジュエリーなど）は、その長さぶんの幅がそのまま要る。
-    高さは、一番多く折り返す名前の行数に揃える。1行と2行が混ざると
-    行の間隔がばらついて読みにくくなるため。
-    """
-    names = [g for g in genres if g]
-    if not names:
-        return 6.5, 1.4
-    widest = max(len(part) for name in names for part in split_genre_name(name))
-    lines = max(pack_lines(split_genre_name(name), widest) for name in names)
-    return max(6.5, widest + 0.5), round(lines * 1.4, 2)
-
-
-def load_config_modifiers(path):
-    """
-    掛け合わせ語と、その判定語を設定から読む。{語: [判定語, ...]} を返す。
-    読めなければ空を返し、2段目のチップは出さない。
-    """
-    try:
-        config = json.loads(Path(path).read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return {}
-    table = {}
-    for modifier, entry in (config.get("modifiers") or {}).items():
-        words = list(entry.get("match_any") or [])
-        if words:
-            table[modifier] = words
-    return table
-
-
-def tag_modifiers(rows, modifiers):
-    """
-    各投稿に、当てはまる掛け合わせ語を付ける。副作用は rows への書き込みのみ。
-
-    判定は本文を見る。組み合わせ検索で見つかった投稿だけに付けると、
-    単独検索で先に拾っていた同じ話題の投稿が絞り込みから漏れるため。
-    """
-    for row in rows:
-        text = row.get("text") or ""
-        row["mods"] = [m for m, words in modifiers.items()
-                       if any(w in text for w in words)]
-
-
 def rising_js(rows):
     """
     「伸び中」の基準を JavaScript の値として書き出す。
@@ -277,25 +206,12 @@ def rising_threshold(rows):
     return values[index]
 
 
-def build_summary(rows, store, archived, config_genres=()):
+def build_summary(rows, store, archived):
     """一覧の上に出す集計。詳細より先に全体像が分かるようにする。"""
-    counts = {}
-    for r in rows:
-        for g in r["genres"]:
-            counts[g] = counts.get(g, 0) + 1
-
-    # 集まっているものを件数の多い順に、まだ0件のものを設定に書いた順で後ろに置く。
-    # 「今どのジャンルが強いか」が先に見え、未収集は下にまとまって読みやすい。
-    collected = sorted(
-        ((g, n) for g, n in counts.items() if n > 0), key=lambda kv: (-kv[1], kv[0])
-    )
-    pending = [(g, 0) for g in config_genres if counts.get(g, 0) == 0]
-
     week = [r for r in rows if r["ageHours"] is not None and r["ageHours"] <= 168]
     return {
         "total": len(rows),
         "archived": archived,
-        "genres": collected + pending,
         "over1000": len([r for r in rows if r["likes"] >= 1000]),
         "thisWeek": len(week),
         "authors": len({r["username"] for r in rows}),
@@ -303,31 +219,36 @@ def build_summary(rows, store, archived, config_genres=()):
     }
 
 
-def render_html(rows, generated_at, store, archived, config_genres=(),
-                config_modifiers=None):
-    summary = build_summary(rows, store, archived, config_genres)
-    # チップの並びは下の「ジャンル別」の棒グラフと揃える
-    genres = [[name, count] for name, count in summary["genres"]]
-    bar_col, bar_minh = bar_name_layout([g for g, _ in genres])
+def search_genres(rows, config_genres=()):
+    """
+    検索窓の候補に出すジャンル名。設定に書いた順に、設定に無いが
+    データに残っている名前を後ろに足す。
 
-    # 掛け合わせ語は設定に書いた順で出す。件数順にすると日ごとに並びが動き、
-    # 「いつもの位置」で押せなくなる（ジャンルより数が少なく、覚えて使うため）
-    mod_counts = {}
-    for row in rows:
-        for m in row.get("mods") or []:
-            mod_counts[m] = mod_counts.get(m, 0) + 1
-    modifiers = [[m, mod_counts.get(m, 0)] for m in (config_modifiers or {})]
+    タブとしては並べない。入力しかけたときの候補（datalist）と、
+    ジャンル名で検索されたときの判定にだけ使う。
+    まだ収集していないジャンルも候補に出す。対象に入っていることが分かるように。
+    """
+    names = list(config_genres)
+    known = set(names)
+    for r in rows:
+        for g in r["genres"]:
+            if g not in known:
+                known.add(g)
+                names.append(g)
+    return names
+
+
+def render_html(rows, generated_at, store, archived, config_genres=()):
+    summary = build_summary(rows, store, archived)
+    genres = search_genres(rows, config_genres)
 
     return (
         TEMPLATE.replace("__DATA__", embed_json(rows))
         .replace("__GENRES__", embed_json(genres))
-        .replace("__MODIFIERS__", embed_json(modifiers))
         .replace("__SUMMARY__", embed_json(summary))
         .replace("__RISING__", rising_js(rows))
         .replace("__GENERATED__", generated_at)
         .replace("__GENRE_COUNT__", str(len(genres)))
-        .replace("__BAR_COL__", str(bar_col))
-        .replace("__BAR_MINH__", str(bar_minh))
         .replace("__COUNT__", str(len(rows)))
     )
 
@@ -458,53 +379,6 @@ TEMPLATE = r"""
   }
   .stat { background: var(--surface); padding: 14px 16px; }
 
-  /* --- ジャンル別の内訳 --- */
-  /* 棒にしておけば、ジャンルが何個あっても1行1本で並ぶので取り残しが出ない */
-  .breakdown { padding: 15px 16px 17px; border-top: 1px solid var(--border); }
-  .breakdown-title {
-    font-size: .7rem; color: var(--muted); letter-spacing: .06em;
-    margin: 0 0 11px; white-space: nowrap;
-  }
-  /* 名前の列は固定幅。名前に合わせて伸ばすと、長いジャンルの行だけ棒の
-     開始位置がずれて、棒どうしの長さを目で比べられなくなる。
-     収まらない名前は「・」の位置で折る（折り位置は .nb で決め打ち）。
-     幅と高さは実際のジャンル名から build_html.py が計算して埋める。 */
-  .bar-row {
-    display: grid;
-    grid-template-columns: __BAR_COL__em 1fr auto;
-    gap: 12px; align-items: center;
-  }
-  .bar-row + .bar-row { margin-top: 8px; }
-  /* 1行で収まる名前も2行の名前と同じ高さにする。混ざると行の間隔が
-     ばらついて、棒の並びが読みにくくなる。
-     flex にしているのは、折り返した2行をまとめて上下中央に置くため。 */
-  .bar-name {
-    font-size: .76rem; line-height: 1.4;
-    min-height: __BAR_MINH__em;
-    display: flex; flex-wrap: wrap; align-content: center;
-  }
-  .bar-track {
-    height: 6px; border-radius: 999px;
-    background: var(--chip); overflow: hidden;
-  }
-  .bar-fill { height: 100%; border-radius: 999px; background: var(--accent); }
-  .bar-count {
-    font-family: "Roboto Mono", ui-monospace, monospace;
-    font-size: .74rem; color: var(--muted);
-    font-variant-numeric: tabular-nums; white-space: nowrap;
-  }
-  @media (max-width: 620px) {
-    /* 幅は変えない。変えると狭い画面だけ折り返し位置が変わってしまう */
-    .bar-row { gap: 9px; }
-  }
-  /* まだ集まっていないジャンル。対象には入っているので消さず、弱く見せる */
-  .bar-row.pending .bar-name { color: var(--muted); }
-  .bar-row.pending .bar-track { opacity: .55; }
-  /* 「収集待ち」は日本語なので、等幅フォントに任せず本文と同じ書体で出す */
-  .bar-row.pending .bar-count {
-    font-family: "Hiragino Sans", "Noto Sans JP", sans-serif;
-    font-size: .7rem;
-  }
   .stat-label {
     font-size: .7rem; color: var(--muted); letter-spacing: .06em;
     display: block; margin-bottom: 4px;
@@ -534,6 +408,7 @@ TEMPLATE = r"""
   }
   .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
   .row + .row { margin-top: 8px; }
+  .hint + .row { margin-top: 10px; }
   select, input[type=search] {
     font: inherit; font-size: .82rem;
     padding: 7px 11px;
@@ -542,32 +417,27 @@ TEMPLATE = r"""
     background: var(--surface);
     color: var(--ink);
   }
-  input[type=search] { flex: 1; min-width: 180px; }
-  .chip {
-    display: inline-flex; align-items: baseline; gap: 6px;
-    font-size: .78rem; padding: 5px 13px;
-    border: 1px solid var(--border); border-radius: 999px;
-    background: var(--surface); color: var(--muted);
-    cursor: pointer; user-select: none;
+  /* 検索窓がこのページの主役。ジャンルのタブは置かず、調べたい語を打って探す */
+  .search-row { flex-wrap: nowrap; }
+  input[type=search] {
+    flex: 1; min-width: 0;
+    font-size: 1rem;
+    padding: 11px 14px;
+    border-width: 1.5px;
+    border-color: var(--accent);
+    border-radius: 10px;
   }
-  .chip:hover { border-color: var(--accent); color: var(--accent); }
-  .chip.on {
-    background: var(--accent-soft); border-color: var(--accent);
-    color: var(--accent); font-weight: 700;
+  .search-btn {
+    font: inherit; font-size: .88rem; font-weight: 700;
+    padding: 11px 18px;
+    border: 0; border-radius: 10px;
+    background: var(--accent); color: var(--surface);
+    cursor: pointer; white-space: nowrap;
   }
-  /* どちらの行を押しているのか分かるようにする。2段になると迷いやすい */
-  .filter-label {
-    font-size: .7rem; color: var(--muted); letter-spacing: .04em;
-    white-space: nowrap; min-width: 5.5em;
+  .hint {
+    font-size: .74rem; color: var(--muted);
+    margin: 8px 0 0; line-height: 1.6;
   }
-  /* ジャンル名は途中で割らない。「ダイエット」を「ダイ」と「エット」に分けない */
-  .chip-name { white-space: nowrap; }
-  /* まだ1件も無いジャンル。押しても空振りするので、選べないことを見た目で示す */
-  .chip.pending {
-    opacity: .45; cursor: default;
-    border-style: dashed;
-  }
-  .chip.pending:hover { border-color: var(--border); color: var(--muted); }
   .count {
     white-space: nowrap;
     font-family: "Roboto Mono", ui-monospace, monospace;
@@ -646,12 +516,19 @@ TEMPLATE = r"""
 
   <div class="panel">
     <div class="summary" id="summary"></div>
-    <div class="breakdown" id="breakdown"></div>
   </div>
   <p class="stamp" id="stamp"></p>
 
   <div class="controls">
-    <div class="row">
+    <form class="row search-row" id="search" role="search">
+      <input type="search" id="q" list="genre-suggest" autocomplete="off"
+             enterkeyhint="search" aria-label="検索ワード"
+             placeholder="調べたいワード（例: マツエク 集客）">
+      <button type="submit" class="search-btn">検索</button>
+    </form>
+    <datalist id="genre-suggest"></datalist>
+    <p class="hint" id="hint"></p>
+    <div class="row sort-row">
       <select id="sort">
         <option value="velocity">並び: 伸びの速さ</option>
         <option value="likes">並び: いいね数</option>
@@ -663,11 +540,6 @@ TEMPLATE = r"""
         <option value="30">期間: 30日以内</option>
       </select>
     </div>
-    <div class="row">
-      <input type="search" id="q" placeholder="本文・ユーザー名で絞り込み">
-    </div>
-    <div class="row" id="genres"><span class="filter-label">ジャンル</span></div>
-    <div class="row" id="modifiers"><span class="filter-label">掛け合わせ</span></div>
   </div>
 
   <div class="count" id="count"></div>
@@ -676,29 +548,25 @@ TEMPLATE = r"""
 
 <script id="data" type="application/json">__DATA__</script>
 <script id="genre-list" type="application/json">__GENRES__</script>
-<script id="modifier-list" type="application/json">__MODIFIERS__</script>
 <script id="summary-data" type="application/json">__SUMMARY__</script>
 <script>
 (function () {
   var readJSON = function (id) { return JSON.parse(document.getElementById(id).textContent); };
   var POSTS = readJSON('data');
   var GENRES = readJSON('genre-list');
-  var MODIFIERS = readJSON('modifier-list');
   var SUMMARY = readJSON('summary-data');
   var RISING = __RISING__;   // 伸び率の上位10%にあたる値
 
-  var activeGenres = new Set();
-  var activeMods = new Set();   // 掛け合わせ語。ジャンルとはANDで効かせる
   var els = {
     sort: document.getElementById('sort'),
     period: document.getElementById('period'),
     q: document.getElementById('q'),
-    genres: document.getElementById('genres'),
-    modifiers: document.getElementById('modifiers'),
+    search: document.getElementById('search'),
+    suggest: document.getElementById('genre-suggest'),
+    hint: document.getElementById('hint'),
     list: document.getElementById('list'),
     count: document.getElementById('count'),
-    summary: document.getElementById('summary'),
-    breakdown: document.getElementById('breakdown')
+    summary: document.getElementById('summary')
   };
 
   function mk(tag, cls, text) {
@@ -734,43 +602,6 @@ TEMPLATE = r"""
     });
   })();
 
-  // --- ジャンル別の内訳 ---
-  // 棒の長さは最多ジャンルを100%とした相対値。1つの投稿が複数ジャンルに
-  // 入ることがあり、合計が総数と一致しないため、全体に対する割合としては見せない。
-  (function renderBreakdown() {
-    if (!SUMMARY.genres.length) { els.breakdown.remove(); return; }
-
-    els.breakdown.appendChild(mk('p', 'breakdown-title', 'ジャンル別'));
-    var max = SUMMARY.genres.reduce(function (m, p) { return Math.max(m, p[1]); }, 0);
-
-    // 長いジャンル名は固定幅の列に1行では収まらない。
-    // 「・」の位置だけで折り、カタカナ語の途中では絶対に割らない。
-    function nameParts(name) {
-      var parts = name.split('・');
-      return parts.map(function (t, i) {
-        // 「・」は前の語にくっつける。行頭に落とさないため
-        return i < parts.length - 1 ? t + '・' : t;
-      });
-    }
-
-    SUMMARY.genres.forEach(function (pair) {
-      var row = mk('div', 'bar-row');
-      if (pair[1] === 0) row.classList.add('pending');
-      row.appendChild(phrases(mk('span', 'bar-name'), nameParts(pair[0])));
-
-      var track = mk('div', 'bar-track');
-      var fill = mk('div', 'bar-fill');
-      fill.style.width = (max > 0 ? (pair[1] / max) * 100 : 0) + '%';
-      track.appendChild(fill);
-      row.appendChild(track);
-
-      // 数字は出さない。棒の長さで強弱は足りる。
-      // まだ集まっていないものだけ、空の棒の理由が分かるよう言葉を添える
-      row.appendChild(mk('span', 'bar-count', pair[1] === 0 ? '収集待ち' : ''));
-      els.breakdown.appendChild(row);
-    });
-  })();
-
   // 何件のうち何件を見ているのかを明示する。
   // 「最終収集」は実際に収集した時刻。HTMLを作り直しただけでは進まない。
   (function renderStamp() {
@@ -784,79 +615,91 @@ TEMPLATE = r"""
     phrases(stamp, units);
   })();
 
-  // --- 絞り込みのチップ（2段構え） ---
-  // 上段: 主ジャンル。単独で検索して意味のある語。
-  // 下段: 掛け合わせ語。「経営」「メニュー」のように単独だと飲食や一般ビジネスを
-  //       拾ってしまう語で、本文に該当語があるかで絞る。
-  // どちらも対象を全部並べる。今日まだ回っていないものを隠すと、
-  // 扱う範囲が狭まったように見えるため。
-  var chipStates = [];
-
-  function makeChip(row, label, onActivate) {
-    var b = mk('span', 'chip');
-    b.appendChild(mk('span', 'chip-name', label));
-    if (onActivate) {
-      b.tabIndex = 0;
-      b.setAttribute('role', 'button');
-      b.addEventListener('click', onActivate);
-      b.addEventListener('keydown', function (e) {
-        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onActivate(); }
-      });
-    } else {
-      // 1件も無いので押しても何も起きない。操作対象から外す
-      b.classList.add('pending');
-      b.setAttribute('aria-disabled', 'true');
-      b.title = '該当する投稿がまだありません';
-    }
-    row.appendChild(b);
-    return b;
+  // --- 検索 ---
+  // ジャンルのタブは置かない。調べたい語を打つと、その語で伸びている投稿が出る。
+  //
+  // 語の比べ方:
+  //   - 全角/半角と英字の大小はそろえる（「ＡＧＡ」でも「aga」でも当たる）
+  //   - 空白で区切った語はすべて含むもの（AND）。「マツエク 集客」で両方を含む投稿
+  //   - ジャンル名と同じ語は「そのジャンルで集めた投稿」＋「本文にその語を含む投稿」。
+  //     ジャンルの投稿は収集時に関連度フィルタを通っているので、本文に語そのものが
+  //     無くても話題は合っている（「マツエク」で集めて本文は「まつげ」だけ、など）
+  //   - ジャンル名はひらがな・カタカナの違いも吸収する（「しみ」でジャンル「シミ」）。
+  //     ただし本文はジャンル名の表記で探す。「しみ」のまま本文を探すと
+  //     「楽しみ」「しみじみ」が大量に当たるため
+  function norm(t) {
+    t = String(t || '');
+    if (t.normalize) t = t.normalize('NFKC');
+    return t.toLowerCase();
   }
-
-  function syncChips() {
-    chipStates.forEach(function (s) {
-      var on = s.isOn();
-      s.el.classList.toggle('on', on);
-      s.el.setAttribute('aria-pressed', on ? 'true' : 'false');
+  // ひらがなをカタカナに寄せる。ジャンル名との突き合わせにだけ使う
+  function kana(t) {
+    return norm(t).replace(/[ぁ-ゖ]/g, function (c) {
+      return String.fromCharCode(c.charCodeAt(0) + 0x60);
     });
   }
 
-  // 選んだ集合を切り替えるチップを1つ作る。上段と下段で作りが同じなのでまとめる
-  function addToggleChip(row, name, active) {
-    var chip = makeChip(row, name, function () {
-      if (active.has(name)) active.delete(name);
-      else active.add(name);
-      syncChips();
-      render();
+  var GENRE_BY_KANA = {};
+  GENRES.forEach(function (g) { GENRE_BY_KANA[kana(g)] = g; });
+
+  // 検索語を、判定に使う形へ一度だけ組み立てる
+  function parseQuery(raw) {
+    return norm(raw).split(/\s+/).filter(Boolean).map(function (w) {
+      var genre = GENRE_BY_KANA[kana(w)] || null;
+      return { word: genre ? norm(genre) : w, genre: genre };
     });
-    chipStates.push({ el: chip, isOn: function () { return active.has(name); } });
   }
 
-  function addAllChip(row, active) {
-    var chip = makeChip(row, 'すべて', function () {
-      active.clear();
-      syncChips();
-      render();
+  function matches(p, terms) {
+    if (!terms.length) return true;
+    if (p._hay === undefined) p._hay = norm(p.text + ' ' + p.username);
+    return terms.every(function (t) {
+      if (t.genre && p.genres.indexOf(t.genre) !== -1) return true;
+      return p._hay.indexOf(t.word) !== -1;
     });
-    chipStates.push({ el: chip, isOn: function () { return active.size === 0; } });
   }
 
-  addAllChip(els.genres, activeGenres);
-  GENRES.forEach(function (pair) {
-    if (pair[1] === 0) { makeChip(els.genres, pair[0], null); return; }
-    addToggleChip(els.genres, pair[0], activeGenres);
+  // 入力候補。タブの代わりに、何を探せるかを打ちかけたときに見せる
+  GENRES.forEach(function (g) {
+    var o = document.createElement('option');
+    o.value = g;
+    els.suggest.appendChild(o);
   });
 
-  if (MODIFIERS.length === 0) {
-    els.modifiers.remove();
-  } else {
-    addAllChip(els.modifiers, activeMods);
-    MODIFIERS.forEach(function (pair) {
-      if (pair[1] === 0) { makeChip(els.modifiers, pair[0], null); return; }
-      addToggleChip(els.modifiers, pair[0], activeMods);
-    });
+  // 検索欄の下の一言。自前の文言なので文節ごとに .nb で囲う
+  function renderHint(terms) {
+    els.hint.textContent = '';
+    if (!terms.length) {
+      phrases(els.hint, ['空欄のときは', '全ジャンルの', '伸びている投稿を', '表示します。',
+                         '複数の語は', '空白で区切ると', 'すべて含む投稿に', '絞れます。']);
+      return;
+    }
+    var named = terms.filter(function (t) { return t.genre; })
+                     .map(function (t) { return '「' + t.genre + '」'; });
+    if (named.length) {
+      phrases(els.hint, [named.join(''), 'は収集ジャンルです。', 'そのジャンルで集めた投稿と、',
+                         '本文に語を含む投稿を', '出しています。']);
+    } else {
+      phrases(els.hint, ['本文と', 'ユーザー名から', '探しています。']);
+    }
   }
 
-  syncChips();
+  // URL の ?q= で開くと、その語で検索した状態から始まる。
+  // よく見る語をブックマークしておけるように
+  function readUrlQuery() {
+    try {
+      var v = new URLSearchParams(window.location.search).get('q');
+      if (v) els.q.value = v;
+    } catch (e) { /* 読めなければ空欄のまま始める */ }
+  }
+  function writeUrlQuery() {
+    try {
+      var url = new URL(window.location.href);
+      var v = els.q.value.trim();
+      if (v) url.searchParams.set('q', v); else url.searchParams.delete('q');
+      window.history.replaceState(null, '', url.toString());
+    } catch (e) { /* file:// などで書けなくても検索は続ける */ }
+  }
 
   function fmtAge(h) {
     if (h === null || h === undefined) return '不明';
@@ -864,30 +707,14 @@ TEMPLATE = r"""
     return Math.round(h / 24) + '日前';
   }
 
-  function filtered() {
+  function filtered(terms) {
     var days = parseInt(els.period.value, 10);
-    var q = els.q.value.trim().toLowerCase();
 
     return POSTS.filter(function (p) {
       if (days > 0) {
         if (p.ageHours === null || p.ageHours > days * 24) return false;
       }
-      if (activeGenres.size > 0) {
-        var hit = p.genres.some(function (g) { return activeGenres.has(g); });
-        if (!hit) return false;
-      }
-      // 掛け合わせはジャンルとAND。「オンライン秘書」かつ「経営」を出すため。
-      // 掛け合わせ語どうしはOR（複数選ぶと候補が広がる）
-      if (activeMods.size > 0) {
-        var mods = p.mods || [];
-        var hitMod = mods.some(function (m) { return activeMods.has(m); });
-        if (!hitMod) return false;
-      }
-      if (q) {
-        var hay = (p.text + ' ' + p.username).toLowerCase();
-        if (hay.indexOf(q) === -1) return false;
-      }
-      return true;
+      return matches(p, terms);
     });
   }
 
@@ -905,14 +732,16 @@ TEMPLATE = r"""
   }
 
   function render() {
-    var rows = sorted(filtered());
+    var terms = parseQuery(els.q.value);
+    renderHint(terms);
+    var rows = sorted(filtered(terms));
     els.count.textContent = rows.length + ' 件を表示';
     els.list.textContent = '';
 
     if (rows.length === 0) {
-      // 「絞り込みを」を1かたまりにして、「を」が行頭に来ないようにする
+      // 「別の語で」を1かたまりにして、「で」が行頭に来ないようにする
       els.list.appendChild(phrases(mk('div', 'empty'), [
-        '条件に合う投稿が', 'ありません。', '絞り込みを', '緩めてください。'
+        '該当する投稿が', 'ありません。', '別の語で', '検索するか、', '期間を', '広げてください。'
       ]));
       return;
     }
@@ -937,11 +766,11 @@ TEMPLATE = r"""
       card.appendChild(mk('p', 'text', p.text));
 
       var tags = mk('div', 'tags');
-      // 上下2段のチップと同じ「ジャンル＋掛け合わせ」を出す。
+      // どのジャンルの収集で見つかったかを出す。
       // 検索語そのものを出すと、「オンライン秘書」と「オンライン秘書 経営」が
       // 並んで冗長になり、1ジャンル1語のときは同じ語が二重に出る
       var seenTags = {};
-      p.genres.concat(p.mods || []).forEach(function (t) {
+      p.genres.forEach(function (t) {
         if (seenTags[t]) return;
         seenTags[t] = true;
         tags.appendChild(mk('span', 'tag', t));
@@ -962,8 +791,27 @@ TEMPLATE = r"""
   [els.sort, els.period].forEach(function (el) {
     el.addEventListener('change', render);
   });
-  els.q.addEventListener('input', render);
+  // 打つそばから絞り込む。3000件なら入力のたびに描き直しても引っかからない
+  els.q.addEventListener('input', function () { render(); writeUrlQuery(); });
+  // 日本語入力の変換を確定する Enter で、検索が走ってキーボードが閉じないようにする。
+  // isComposing だけでは Safari で確定直後の Enter を取りこぼすので、
+  // compositionend の直後も1拍だけ「変換中」とみなす
+  var composing = false;
+  els.q.addEventListener('compositionstart', function () { composing = true; });
+  els.q.addEventListener('compositionend', function () {
+    setTimeout(function () { composing = false; }, 0);
+  });
+  // Enter や「検索」ボタンでページが再読み込みされないようにする。
+  // スマホではキーボードを閉じて結果を見せる
+  els.search.addEventListener('submit', function (e) {
+    e.preventDefault();
+    if (composing) return;
+    render();
+    writeUrlQuery();
+    els.q.blur();
+  });
 
+  readUrlQuery();
   render();
 })();
 </script>
@@ -998,11 +846,9 @@ def main():
     rows.sort(key=lambda r: r["likes"], reverse=True)
 
     config_genres = load_config_genres(args.config)
-    config_modifiers = load_config_modifiers(args.config)
-    tag_modifiers(rows, config_modifiers)
     html = render_html(
         rows, now_jst_iso()[:16].replace("T", " "), store, len(all_rows),
-        config_genres, config_modifiers,
+        config_genres,
     )
 
     args.output.parent.mkdir(parents=True, exist_ok=True)

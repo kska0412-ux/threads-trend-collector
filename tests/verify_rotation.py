@@ -4,7 +4,7 @@ collect.py のジャンルローテーションを検証する。ブラウザも
 
 守りたいこと:
   1. 1回の実行で処理する語数が一定であること（実行時間が読めなくなるのを防ぐ）
-  2. 1日3回まわせば全ジャンルが1周すること（収集されないジャンルを作らない）
+  2. 計算どおりの回数で全ジャンルが1周すること（収集されないジャンルを作らない）
   3. 設定ファイルを編集しても位置がずれず、壊れても止まらないこと
 """
 
@@ -283,17 +283,23 @@ check("全ジャンルに required_any がある", missing == [], missing)
 empty = [g for g, e in config["genres"].items() if not e.get("keywords")]
 check("全ジャンルにキーワードがある", empty == [], empty)
 
-# 1日3回の実行で全ジャンルを一周できることが、この方式の前提
+# 1日3回の実行で全語を一周できることが、この方式の前提。
+# ただし1回の語数は MAX_BATCH で頭打ちなので、語数がそれを超える構成では
+# 一周に複数日かかる（85語なら20語×3回で約1.4日）。ここでは
+# 「計算どおりの回数で全語をまわりきる」ことと「一周が2日以内」を確かめる
 real_batch = auto_batch(len(real))
+runs_needed = -(-len(real) // real_batch)
 covered = set()
 state = {}
-for _ in range(RUNS_PER_DAY):
+for _ in range(runs_needed):
     batch, _start = select_batch(real, state, real_batch)
     covered.update(batch)
     state = state_of(batch[-1])
 uncovered = [f"{g}/{k}" for g, k in real if (g, k) not in covered]
-check(f"1日{RUNS_PER_DAY}回（{real_batch}語×{RUNS_PER_DAY}）で全語をまわりきる",
+check(f"{runs_needed}回（{real_batch}語×{runs_needed}）で全語をまわりきる",
       uncovered == [], uncovered)
+check(f"一周が2日以内（{runs_needed}回 ÷ 1日{RUNS_PER_DAY}回）",
+      runs_needed <= RUNS_PER_DAY * 2, runs_needed)
 
 # 1回あたりの語数が跳ねると、実行時間が読めなくなる
 sizes = []

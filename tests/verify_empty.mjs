@@ -3,7 +3,7 @@
  *
  * 収集を始める前や、ジャンルを総入れ替えした直後は必ず0件から始まる。
  * ここで伸び率の基準が Python の inf のまま埋まると、JS では未定義の
- * 識別子になってスクリプトが丸ごと止まり、チップも一覧も出なくなる。
+ * 識別子になってスクリプトが丸ごと止まり、検索も一覧も効かなくなる。
  */
 import fs from 'fs';
 import { pathToFileURL } from 'url';
@@ -33,28 +33,14 @@ check('伸び率の基準がJSの値になっている（infではない）',
       String(win.document.documentElement.innerHTML.match(/var RISING = ([^;]+);/)[1]));
 
 console.log('--- 0件でも骨組みは出ること ---');
-const chips = [...doc.querySelectorAll('#genres .chip')];
-const modChips = [...doc.querySelectorAll('#modifiers .chip')];
 const declared = Number((doc.querySelector('.ver').textContent.match(/(\d+)ジャンル/) || [])[1]);
 check('見出しがジャンル数を名乗る', declared > 0, doc.querySelector('.ver').textContent);
-// 0件でもジャンルを出さないと、対象が無いツールに見えてしまう
-check('「すべて」＋設定のジャンルが並ぶ', chips.length === declared + 1,
-      { chips: chips.length, declared });
-check('全ジャンルが「収集待ち」', chips.slice(1).every(c => c.classList.contains('pending')),
-      chips.slice(1).filter(c => !c.classList.contains('pending')).length);
-// 掛け合わせは本文で判定するので、0件のときは全部が押せない状態になる
-check('掛け合わせも「すべて」＋全語が並ぶ', modChips.length > 1, modChips.length);
-check('掛け合わせも全部「収集待ち」',
-      modChips.slice(1).every(c => c.classList.contains('pending')),
-      modChips.slice(1).filter(c => !c.classList.contains('pending')).length);
-const bars = [...doc.querySelectorAll('.bar-row')];
-check('棒もジャンルの数だけ並ぶ', bars.length === declared, bars.length);
-check('棒の長さは全部0',
-      bars.every(b => parseFloat(b.querySelector('.bar-fill').style.width) === 0),
-      bars.map(b => b.querySelector('.bar-fill').style.width));
-check('全部「収集待ち」と出る',
-      bars.every(b => b.querySelector('.bar-count').textContent === '収集待ち'),
-      bars.map(b => b.querySelector('.bar-count').textContent));
+// 0件でも何を探せるかが分からないと、対象が無いツールに見えてしまう
+const suggest = doc.querySelectorAll('#genre-suggest option');
+check('入力候補に設定のジャンルが並ぶ', suggest.length === declared, { suggest: suggest.length, declared });
+check('検索窓が出る', doc.getElementById('q') !== null, null);
+check('チップも棒も出さない',
+      doc.querySelectorAll('.chip').length === 0 && doc.querySelectorAll('.bar-row').length === 0, null);
 
 console.log('--- 0件の一覧 ---');
 check('カードは0件', doc.querySelectorAll('.card').length === 0, doc.querySelectorAll('.card').length);
@@ -72,8 +58,12 @@ const sortEl = doc.getElementById('sort');
 sortEl.value = 'likes';
 sortEl.dispatchEvent(new win.Event('change', { bubbles: true }));
 check('並び替えても落ちない', errors.length === 0, errors);
-chips[0].dispatchEvent(new win.MouseEvent('click', { bubbles: true }));
-check('チップを押しても落ちない', errors.length === 0, errors);
+const form = doc.getElementById('search');
+form.dispatchEvent(new win.Event('submit', { bubbles: true, cancelable: true }));
+check('検索ボタンを押しても落ちない', errors.length === 0, errors);
+q.value = '育毛';
+q.dispatchEvent(new win.Event('input', { bubbles: true }));
+check('ジャンル語で探しても落ちない', errors.length === 0, errors);
 
 console.log(`\n結果: ${pass} pass / ${fail} fail`);
 process.exit(fail === 0 ? 0 : 1);

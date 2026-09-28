@@ -49,9 +49,33 @@ const empty = doc.querySelector('.empty');
 check('該当なしのメッセージが出る', empty !== null, null);
 const emptyUnits = [...empty.querySelectorAll('.nb')].map(e => e.textContent);
 check('文節ごとに分かれている', emptyUnits.length >= 2, emptyUnits);
-check('「絞り込みを」が1かたまりになっている', emptyUnits.includes('絞り込みを'), emptyUnits);
+check('「別の語で」が1かたまりになっている', emptyUnits.includes('別の語で'), emptyUnits);
 check('全文が .nb の中に収まっている',
       emptyUnits.join('') === empty.textContent, { units: emptyUnits.join(''), all: empty.textContent });
+
+// 検索欄の下のヒント。空欄のときと、ジャンル語で探したときの両方
+q.value = '';
+q.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+const hint = doc.getElementById('hint');
+const hintBlank = [...hint.querySelectorAll('.nb')].map(e => e.textContent);
+check('空欄のヒントが文節ごとに分かれている', hintBlank.length >= 2, hintBlank);
+check('空欄のヒントが全文 .nb に収まる', hintBlank.join('') === hint.textContent,
+      { units: hintBlank.join(''), all: hint.textContent });
+q.value = '育毛';
+q.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+const hintGenre = [...hint.querySelectorAll('.nb')].map(e => e.textContent);
+check('ジャンル語のヒントが全文 .nb に収まる', hintGenre.join('') === hint.textContent,
+      { units: hintGenre.join(''), all: hint.textContent });
+check('ヒントの括弧が行末・行頭で割れない',
+      hintBlank.concat(hintGenre).every(u => !/[（(「『]$/.test(u) && !/^[）)」』、。\s]/.test(u)),
+      hintBlank.concat(hintGenre));
+q.value = 'ぜったいに存在しない語';
+q.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+q.value = '頭皮';
+q.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+const hintText = [...hint.querySelectorAll('.nb')].map(e => e.textContent);
+check('本文検索のヒントが全文 .nb に収まる', hintText.join('') === hint.textContent,
+      { units: hintText.join(''), all: hint.textContent });
 
 // 助詞で始まるかたまりが無いこと
 const PARTICLES = ['を', 'と', 'は', 'が', 'に', 'で', 'の', 'も', 'へ', 'や', 'から', 'まで'];
@@ -78,26 +102,8 @@ check('括弧が行末・行頭で割れない',
       verUnits.every(u => !/[（(「『]$/.test(u) && !/^[）)」』、。\s]/.test(u)), verUnits);
 check('ジャンル数と単位が離れない', verUnits.some(u => /\d+ジャンル/.test(u)), verUnits);
 
-console.log('--- 6. ジャンル別の横棒 ---');
-// 名前の長さで列幅が動くと、棒の開始位置が行ごとにずれる
-check('名前の列が固定幅',
-      /\.bar-row\s*\{[^}]*grid-template-columns:\s*[\d.]+em 1fr auto/s.test(css), null);
-const barUnits = [...doc.querySelectorAll('.bar-name .nb')].map(e => e.textContent);
-check('ジャンル名が文節ごとに分かれている', barUnits.length > 0, barUnits);
-check('「・」が行頭に来ない', barUnits.every(u => !u.startsWith('・')), barUnits);
-check('棒グラフに助詞始まりが無い',
-      barUnits.filter(t => PARTICLES.some(pt => t.startsWith(pt))).length === 0, barUnits);
-
-console.log('--- 7. ジャンルのチップ ---');
-// 「ダイエット・痩身」のような長いジャンル名が「ダイ」「エット」に割れないこと
-check('ジャンル名が途中で割れない',
-      /\.chip-name\s*\{[^}]*white-space:\s*nowrap/s.test(css), null);
-// 「収集待ち」が等幅フォントに落ちて崩れないこと
-check('収集待ちの表記が本文と同じ書体',
-      /\.bar-row\.pending\s+\.bar-count\s*\{[^}]*font-family/s.test(css), null);
-const chipNames = [...doc.querySelectorAll('.chip-name')].map(e => e.textContent.trim());
-check('チップに助詞始まりが無い',
-      chipNames.filter(t => PARTICLES.some(pt => t.startsWith(pt))).length === 0, chipNames);
+console.log('--- 6. 検索ボタン ---');
+check('「検索」ボタンが途中で割れない', /\.search-btn\s*\{[^}]*white-space:\s*nowrap/s.test(css), null);
 
 console.log(`\n結果: ${pass} pass / ${fail} fail`);
 process.exit(fail === 0 ? 0 : 1);

@@ -165,7 +165,7 @@ def build_pairs(config):
 
 
 def build_modifiers(config):
-    """掛け合わせ語と、ページ側の絞り込みに使う語を返す。{語: [判定語, ...]}。"""
+    """掛け合わせ語と、その判定語を返す。{語: [判定語, ...]}。"""
     table = {}
     for modifier, entry in (config.get("modifiers") or {}).items():
         table[modifier] = list(entry.get("match_any") or [])
@@ -283,8 +283,8 @@ def stale_genres(store, config_genres):
     蓄積に残っているのに、設定にはもう無いジャンル名を数える。
     {ジャンル名: 件数} を件数の多い順で返す。
 
-    設定のジャンル名だけ変えて蓄積を放置すると、ページに新旧のチップが
-    両方並び、どちらを押しても半分しか出てこない状態になる。
+    設定のジャンル名だけ変えて蓄積を放置すると、新しい名前で検索しても
+    半分しか出てこず、入力候補とタグに新旧の名前が両方並ぶ。
     付け替えは名前の対応を機械では決められないので、警告だけ出す。
     """
     if not config_genres:
@@ -304,7 +304,7 @@ def warn_stale_genres(store, config_genres):
     if not stale:
         return
     print("\n[注意] 設定に無いジャンル名が蓄積に残っています。")
-    print("       ページに新旧のチップが両方並びます。")
+    print("       新しい名前で検索しても蓄積済みの投稿が出ません。")
     for genre, count in stale.items():
         print(f"  - {genre}: {count} 件")
     print("  ジャンル名を変えたなら、蓄積側も付け替えてください:")
