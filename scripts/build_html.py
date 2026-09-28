@@ -237,11 +237,17 @@ def render_html(rows, config_genres=()):
     )
 
 
-TEMPLATE = r"""
+TEMPLATE = r"""<!doctype html>
+<html lang="ja">
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <!-- 公開リポジトリで配信するため、検索結果には出さない -->
 <meta name="robots" content="noindex, nofollow">
+<!-- LINE などのアプリ内ブラウザは前に開いたページを覚えていて、更新後も古い版を
+     出し続けることがある。1日3回更新するページなので、毎回取り直させる -->
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+<meta http-equiv="Pragma" content="no-cache">
+<meta http-equiv="Expires" content="0">
 <title>Threads Research Tool（美容ビジネス ver）</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -387,6 +393,8 @@ TEMPLATE = r"""
   .suggest {
     position: absolute; top: calc(100% + 4px); left: 0; right: 0; z-index: 30;
     margin: 0; padding: 4px 0; list-style: none;
+    /* min() を読めない古いアプリ内ブラウザ向けに、先に固定値を置く */
+    max-height: 320px;
     max-height: min(50vh, 320px); overflow-y: auto;
     -webkit-overflow-scrolling: touch; overscroll-behavior: contain;
     background: var(--surface);
@@ -798,6 +806,9 @@ TEMPLATE = r"""
   // 打つそばから絞り込む。3000件なら入力のたびに描き直しても引っかからない
   els.q.addEventListener('input', function () { render(); writeUrlQuery(); openSuggest(); });
   els.q.addEventListener('focus', openSuggest);
+  // アプリ内ブラウザでは、すでにフォーカスがある検索窓をもう一度タップしても
+  // focus が来ない（キーボードだけ閉じて開き直す）ことがある。タップでも開く
+  els.q.addEventListener('click', function () { if (els.suggest.hidden) openSuggest(); });
   // 一覧の外をタップしたら閉じる
   els.q.addEventListener('blur', closeSuggest);
   // PC では矢印キーで候補を選び、Enter で決める。Esc で閉じる

@@ -93,6 +93,16 @@ check('選ぶと検索が効く（頭皮かつヘッドスパ＝p3）', n() === 
 qs.dispatchEvent(new window.FocusEvent('focus'));
 qs.dispatchEvent(new window.FocusEvent('blur'));
 check('外をタップすると閉じる', box.hidden === true, box.hidden);
+// アプリ内ブラウザでは focus が来ないことがあるので、タップ（click）でも開く
+qs.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+check('タップだけでも開く', box.hidden === false, box.hidden);
+qs.dispatchEvent(new window.FocusEvent('blur'));
+// doctype が無いと互換モードで描かれ、アプリ内ブラウザで崩れる原因になる
+check('標準モードで描かれる（doctype あり）', doc.compatMode === 'CSS1Compat', doc.compatMode);
+check('言語が日本語', doc.documentElement.getAttribute('lang') === 'ja', doc.documentElement.getAttribute('lang'));
+// LINE のアプリ内ブラウザが古い版を出し続けないよう、取り直しを求める
+check('キャッシュしない指定がある',
+      !!doc.querySelector('meta[http-equiv="Cache-Control"][content*="no-cache"]'), null);
 // キーボード操作（PC）
 qs.value = ''; fire(qs, 'input');
 qs.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true, cancelable: true }));
