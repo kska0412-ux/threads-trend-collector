@@ -60,7 +60,7 @@ const WITH_DATA = 4;   // フィクスチャがデータを持つジャンル数
 const declared = Number((doc.querySelector('.ver').textContent.match(/(\d+)ジャンル/) || [])[1]);
 check('見出しがジャンル数を名乗る', declared > 0, doc.querySelector('.ver').textContent);
 check('データの数ではなく設定の数を名乗る', declared > WITH_DATA, doc.querySelector('.ver').textContent);
-const suggest = [...doc.querySelectorAll('#genre-suggest .suggest-item')].map(o => o.textContent);
+const suggest = [...doc.querySelectorAll('#genre-suggest .suggest-item:not(.combo)')].map(o => o.textContent);
 check('入力候補に設定のジャンルが全部並ぶ', suggest.length === declared, { suggest: suggest.length, declared });
 check('検索窓と入力候補がつながっている', doc.getElementById('q').getAttribute('aria-controls') === 'genre-suggest', null);
 // <datalist> は iPhone の Safari などで一覧が出ないので使わない
@@ -73,13 +73,19 @@ const shownItems = () => [...box.querySelectorAll('.suggest-item')].filter(li =>
 check('最初は閉じている', box.hidden === true, box.hidden);
 qs.dispatchEvent(new window.FocusEvent('focus'));
 check('タップ（フォーカス）で開く', box.hidden === false && qs.getAttribute('aria-expanded') === 'true', box.hidden);
-check('空欄なら全ジャンルが出る', shownItems().length === declared, shownItems().length);
+check('空欄なら全ジャンルが出る（◯◯サロンは出さない）', shownItems().length === declared, shownItems().length);
 qs.value = 'へっど'; fire(qs, 'input');
-check('打ちかけの語で絞る（ひらがなでも当たる）', shownItems().join('/') === 'ヘッドスパ', shownItems());
+check('打ちかけの語で絞る（ひらがなでも当たる）', shownItems().join('/') === 'ヘッドスパ/ヘッドスパサロン', shownItems());
 qs.value = 'ざざざ'; fire(qs, 'input');
 check('当たる候補が無ければ閉じる', box.hidden === true, shownItems());
 qs.value = '頭皮 へっど'; fire(qs, 'input');
-check('最後の語で絞る', shownItems().join('/') === 'ヘッドスパ', shownItems());
+check('最後の語で絞る', shownItems().join('/') === 'ヘッドスパ/ヘッドスパサロン', shownItems());
+// 「×」の後ろを打ちかけても候補が出る
+qs.value = '頭皮×へっど'; fire(qs, 'input');
+check('「×」の後ろの語で絞る', shownItems().join('/') === 'ヘッドスパ/ヘッドスパサロン', shownItems());
+check('「◯◯サロン」の候補は打ちかけたときだけ出る',
+      box.querySelectorAll('.suggest-item.combo').length > 0, null);
+qs.value = '頭皮 へっど'; fire(qs, 'input');
 // タップで選ぶ。押した瞬間にフォーカスが外れて一覧が閉じないこと
 const item = [...box.querySelectorAll('.suggest-item')].find(li => li.textContent === 'ヘッドスパ');
 const md = new window.MouseEvent('mousedown', { bubbles: true, cancelable: true });
@@ -173,6 +179,25 @@ per5.value = '0'; fire(per5, 'change');
 // ヒント文。ジャンル語で探しているのか、本文を探しているのかが分かる
 check('ジャンル語のときはヒントに出る', doc.getElementById('hint').textContent.includes('「育毛」'),
       doc.getElementById('hint').textContent);
+// 「◯◯サロン」「◯◯×サロン」はジャンルと「サロン」の掛け合わせとして読む。
+// エステティシャンは p2/p4/p7/p9、本文に「サロン」を含むのは p9/p10
+search('エステティシャンサロン');
+check('「◯◯サロン」でジャンル×サロン（1件）', n() === 1 && users()[0] === 'salon_keiei', users());
+check('ヒントにジャンルとサロンが出る',
+      doc.getElementById('hint').textContent.includes('「エステティシャン」') &&
+      doc.getElementById('hint').textContent.includes('「サロン」も'),
+      doc.getElementById('hint').textContent);
+for (const v of ['エステティシャン×サロン', 'エステティシャン✖️サロン', 'エステティシャン ✕ サロン', 'エステティシャン サロン']) {
+  search(v);
+  check(`「${v}」も同じ結果`, n() === 1 && users()[0] === 'salon_keiei', users());
+}
+// ひらがなでも分けられる
+search('せらぴすとさろん');
+check('ひらがなの「◯◯さろん」も分ける（セラピスト×サロン＝p10）', n() === 1 && users()[0] === 'school_note', users());
+// 前半がジャンル名でなければ分けない（本文をそのまま探す）
+search('美容サロン');
+check('ジャンル名そのものが「サロン」で終わるときは分けない',
+      doc.getElementById('hint').textContent.includes('収集ジャンルです'), doc.getElementById('hint').textContent);
 search('');
 check('空欄に戻すと全件', n() === 10, n());
 check('空欄のヒントは全ジャンルの案内', doc.getElementById('hint').textContent.includes('全ジャンル'),

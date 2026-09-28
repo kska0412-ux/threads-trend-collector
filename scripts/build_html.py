@@ -498,7 +498,7 @@ TEMPLATE = r"""<!doctype html>
                enterkeyhint="search" aria-label="検索ワード"
                role="combobox" aria-autocomplete="list"
                aria-controls="genre-suggest" aria-expanded="false"
-               placeholder="調べたいワード（例: マツエク 集客）">
+               placeholder="調べたいワード（例: ネイルサロン）">
         <ul class="suggest" id="genre-suggest" role="listbox" aria-label="収集ジャンル" hidden></ul>
       </div>
       <button type="submit" class="search-btn">検索</button>
@@ -584,11 +584,31 @@ TEMPLATE = r"""<!doctype html>
   GENRES.forEach(function (g) { GENRE_BY_KANA[kana(g)] = g; });
 
   // 検索語を、判定に使う形へ一度だけ組み立てる
+  //
+  // 「ネイルサロン」「ネイル×サロン」は「ネイル」と「サロン」の掛け合わせとして読む。
+  // 1語のまま本文を探すと「ネイルサロン」と続けて書いた投稿しか当たらず、
+  // ネイルで集めた投稿のうちサロンの話をしているものが漏れるため。
+  // 前半がジャンル名のときだけ分ける（「エステサロン」はそのまま本文を探す）
+  var SALON = 'サロン';
+  // 語の区切り。空白のほかに「×」「✕」「✖️」も区切りとして扱う
+  var SEP = /[\s×✕✖️]+/;
+
   function parseQuery(raw) {
-    return norm(raw).split(/\s+/).filter(Boolean).map(function (w) {
-      var genre = GENRE_BY_KANA[kana(w)] || null;
-      return { word: genre ? norm(genre) : w, genre: genre };
+    var terms = [];
+    norm(raw).split(SEP).filter(Boolean).forEach(function (w) {
+      var k = kana(w);
+      var genre = GENRE_BY_KANA[k] || null;
+      if (!genre && k.length > SALON.length && k.slice(-SALON.length) === SALON) {
+        var head = GENRE_BY_KANA[k.slice(0, -SALON.length)] || null;
+        if (head) {
+          terms.push({ word: norm(head), genre: head });
+          terms.push({ word: norm(SALON), genre: null });
+          return;
+        }
+      }
+      terms.push({ word: genre ? norm(genre) : w, genre: genre });
     });
+    return terms;
   }
 
   function matches(p, terms) {
@@ -604,19 +624,29 @@ TEMPLATE = r"""<!doctype html>
   // タブの代わりに、検索窓をタップしたとき収集ジャンルを一覧で見せる。
   // <datalist> は iPhone の Safari などで一覧が出ないので自前で組む。
   // 候補は打ちかけの最後の語で絞る（ひらがなでも当たる）。選ぶとその語に置き換える
-  var suggestItems = GENRES.map(function (g) {
-    var li = mk('li', 'suggest-item', g);
+  // 各ジャンルのすぐ後ろに「◯◯サロン」も置く。こちらは何か打ちかけたときだけ出す
+  // （空欄で全部出すと候補が倍の長さになり、目当てのジャンルを探しにくい）
+  var suggestItems = [];
+  function addSuggest(label, id, combo) {
+    var li = mk('li', 'suggest-item' + (combo ? ' combo' : ''), label);
     li.setAttribute('role', 'option');
-    li.id = 'suggest-' + GENRES.indexOf(g);
-    li.dataset.genre = g;
-    li.dataset.key = kana(g);
+    li.id = id;
+    li.dataset.genre = label;
+    li.dataset.key = kana(label);
+    if (combo) li.dataset.combo = '1';
     els.suggest.appendChild(li);
-    return li;
+    suggestItems.push(li);
+  }
+  GENRES.forEach(function (g, i) {
+    addSuggest(g, 'suggest-' + i, false);
+    // 「美容サロン」に「サロン」を重ねない
+    if (kana(g).slice(-SALON.length) !== SALON) addSuggest(g + SALON, 'suggest-s' + i, true);
   });
   var activeIndex = -1;
 
+  // 打ちかけの最後の語。「ネイル×サ」の「サ」のように、× の後ろも1語として見る
   function lastWord(v) {
-    var m = String(v).match(/(^|\s)(\S*)$/);
+    var m = String(v).match(/(^|[\s×✕✖️])([^\s×✕✖️]*)$/);
     return m ? m[2] : '';
   }
 
@@ -643,7 +673,7 @@ TEMPLATE = r"""<!doctype html>
     var key = kana(lastWord(els.q.value));
     var shown = 0;
     suggestItems.forEach(function (li) {
-      var hit = !key || li.dataset.key.indexOf(key) !== -1;
+      var hit = key ? li.dataset.key.indexOf(key) !== -1 : !li.dataset.combo;
       li.hidden = !hit;
       if (hit) shown++;
     });
@@ -688,7 +718,13 @@ TEMPLATE = r"""<!doctype html>
     }
     var named = terms.filter(function (t) { return t.genre; })
                      .map(function (t) { return '「' + t.genre + '」'; });
-    if (named.length) {
+    var plain = terms.filter(function (t) { return !t.genre; })
+                     .map(function (t) { return '「' + t.word + '」'; });
+    if (named.length && plain.length) {
+      // 「ネイルサロン」＝ネイルで集めた投稿のうち、サロンも含むもの
+      phrases(els.hint, [named.join(''), 'で集めた投稿と、', '本文に語を含む投稿のうち、',
+                         plain.join('') + 'も', '含むものを', '出しています。']);
+    } else if (named.length) {
       phrases(els.hint, [named.join(''), 'は収集ジャンルです。', 'そのジャンルで集めた投稿と、',
                          '本文に語を含む投稿を', '出しています。']);
     } else {

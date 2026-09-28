@@ -36,7 +36,7 @@ console.log('--- 0件でも骨組みは出ること ---');
 const declared = Number((doc.querySelector('.ver').textContent.match(/(\d+)ジャンル/) || [])[1]);
 check('見出しがジャンル数を名乗る', declared > 0, doc.querySelector('.ver').textContent);
 // 0件でも何を探せるかが分からないと、対象が無いツールに見えてしまう
-const suggest = doc.querySelectorAll('#genre-suggest .suggest-item');
+const suggest = doc.querySelectorAll('#genre-suggest .suggest-item:not(.combo)');
 check('入力候補に設定のジャンルが並ぶ', suggest.length === declared, { suggest: suggest.length, declared });
 check('検索窓が出る', doc.getElementById('q') !== null, null);
 check('チップも棒も出さない',
