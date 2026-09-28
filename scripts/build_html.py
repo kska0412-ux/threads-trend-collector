@@ -606,6 +606,11 @@ TEMPLATE = r"""<!doctype html>
           return;
         }
       }
+      // 「さろん」とひらがなで打っても、本文は「サロン」の表記で探す
+      if (!genre && k === SALON) {
+        terms.push({ word: norm(SALON), genre: null });
+        return;
+      }
       terms.push({ word: genre ? norm(genre) : w, genre: genre });
     });
     return terms;

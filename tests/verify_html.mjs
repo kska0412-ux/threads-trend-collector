@@ -187,7 +187,7 @@ check('ヒントにジャンルとサロンが出る',
       doc.getElementById('hint').textContent.includes('「エステティシャン」') &&
       doc.getElementById('hint').textContent.includes('「サロン」も'),
       doc.getElementById('hint').textContent);
-for (const v of ['エステティシャン×サロン', 'エステティシャン✖️サロン', 'エステティシャン ✕ サロン', 'エステティシャン サロン']) {
+for (const v of ['エステティシャン×サロン', 'エステティシャン✖️サロン', 'エステティシャン ✕ サロン', 'エステティシャン サロン', 'えすてぃしゃん さろん'.replace('えすてぃしゃん', 'エステティシャン')]) {
   search(v);
   check(`「${v}」も同じ結果`, n() === 1 && users()[0] === 'salon_keiei', users());
 }
